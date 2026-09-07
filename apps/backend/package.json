@@ -1,0 +1,36 @@
+{
+  "name": "@repo/backend",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run src/server.ts",
+    "start": "bun run src/server.ts",
+    "build": "prisma generate && tsc --noEmit",
+    "check-types": "tsc --noEmit",
+    "lint": "eslint src --max-warnings 0",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:migrate:deploy": "prisma migrate deploy",
+    "db:studio": "prisma studio"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.5.0",
+    "@repo/voice-types": "*",
+    "dotenv": "^16.4.5",
+    "hono": "^4.6.0",
+    "livekit-server-sdk": "^2.0.0",
+    "nanoid": "^3.3.18",
+    "openai": "^6.49.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@repo/eslint-config": "*",
+    "@repo/typescript-config": "*",
+    "@types/bun": "^1.2.0",
+    "@types/node": "^22.10.0",
+    "eslint": "10.9.1",
+    "prisma": "^6.5.0",
+    "typescript": "7.0.2"
+  }
+}

@@ -1,0 +1,136 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum InterviewStatus {
+  created
+  analyzing
+  ready
+  active
+  completing
+  completed
+  failed
+  evaluation_failed
+}
+
+enum SessionStatus {
+  created
+  active
+  completed
+  failed
+}
+
+enum TurnRole {
+  user
+  assistant
+}
+
+model Interview {
+  id            String          @id @default(cuid())
+  githubUrl     String
+  owner         String
+  name          String
+  status        InterviewStatus @default(created)
+  systemPrompt  String?
+  error         String?
+  createdAt     DateTime        @default(now())
+  startedAt     DateTime?
+  completedAt   DateTime?
+  githubContext GithubContext?
+  interviewPlan InterviewPlan?
+  sessions      InterviewSession[]
+  turns         ConversationTurn[]
+  events        RealtimeEvent[]
+  evaluation    Evaluation?
+
+  @@index([githubUrl])
+}
+
+model GithubContext {
+  id             String   @id @default(cuid())
+  interviewId    String   @unique
+  interview      Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  repository     Json
+  languages      String[]
+  technologies   String[]
+  dependencies   String[]
+  architecture   Json
+  importantFiles Json
+  projectSummary String
+  evidence       Json
+}
+
+model InterviewPlan {
+  id          String   @id @default(cuid())
+  interviewId String   @unique
+  interview   Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  role        String
+  difficulty  String
+  topics      Json
+  questions   Json
+}
+
+model InterviewSession {
+  id          String        @id @default(cuid())
+  interviewId String
+  interview   Interview     @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  roomName    String        @unique
+  serverUrl   String
+  status      SessionStatus @default(created)
+  startedAt   DateTime?
+  endedAt     DateTime?
+  createdAt   DateTime      @default(now())
+  turns       ConversationTurn[]
+  events      RealtimeEvent[]
+
+  @@index([interviewId])
+}
+
+model ConversationTurn {
+  id          String   @id
+  interviewId String
+  interview   Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  sessionId   String
+  session     InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  turnIndex   Int
+  role        TurnRole
+  text        String
+  createdAt   DateTime @default(now())
+  completedAt DateTime?
+
+  @@index([interviewId])
+  @@index([sessionId])
+}
+
+model RealtimeEvent {
+  id          String   @id @default(cuid())
+  eventId     String   @unique
+  interviewId String
+  interview   Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  sessionId   String
+  session     InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  type        String
+  timestamp   DateTime
+  payload     Json
+
+  @@index([interviewId])
+  @@index([sessionId])
+}
+
+model Evaluation {
+  id          String   @id @default(cuid())
+  interviewId String   @unique
+  interview   Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  score       Int
+  dimensions  Json
+  strengths   String[]
+  weaknesses  String[]
+  feedback    String
+  status      String   @default("completed")
+  createdAt   DateTime @default(now())
+}

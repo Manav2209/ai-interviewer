@@ -17,6 +17,7 @@ export type DomainEvent =
   | { type: "response.delta"; text: string; sessionId: string }
   | { type: "response.completed"; fullText: string; status: string; sessionId: string }
   | { type: "error"; error: string; sessionId: string };
+  
 export interface SessionManagerOptions {
   agent: voice.Agent;
   stt: sttModule.STT;

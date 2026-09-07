@@ -16,10 +16,12 @@
     "@livekit/agents-plugin-deepgram": "^1.7.0",
     "@livekit/agents-plugin-openai": "^1.7.0",
     "@livekit/agents-plugin-sarvam": "^1.6.0",
-    "@livekit/rtc-node": "^0.9.0",
+    "@livekit/rtc-node": "^0.13.34",
     "@repo/providers": "*",
     "@repo/voice-types": "*",
-    "dotenv": "^16.4.5"
+    "dotenv": "^16.4.5",
+    "livekit-server-sdk": "^2.0.0",
+    "nanoid": "^3.3.18"
   },
   "devDependencies": {
     "@repo/eslint-config": "*",
