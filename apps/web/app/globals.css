@@ -1,12 +1,21 @@
 :root {
   --background: #ffffff;
   --foreground: #171717;
+  --muted: #6b7280;
+  --accent: #2563eb;
+  --accent-contrast: #ffffff;
+  --border: #e5e7eb;
+  --success: #16a34a;
+  --danger: #dc2626;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
     --background: #0a0a0a;
     --foreground: #ededed;
+    --muted: #9ca3af;
+    --accent: #3b82f6;
+    --border: #1f2937;
   }
 }
 
@@ -19,6 +28,7 @@ body {
 body {
   color: var(--foreground);
   background: var(--background);
+  font-family: var(--font-geist-sans), system-ui, -apple-system, sans-serif;
 }
 
 * {
@@ -32,19 +42,250 @@ a {
   text-decoration: none;
 }
 
-.imgDark {
-  display: none;
+button {
+  font: inherit;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 16px;
+  background: var(--accent);
+  color: var(--accent-contrast);
 }
 
-@media (prefers-color-scheme: dark) {
-  html {
-    color-scheme: dark;
-  }
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
 
-  .imgLight {
-    display: none;
+input {
+  font: inherit;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--foreground);
+  min-width: 0;
+  flex: 1;
+}
+
+.error {
+  color: var(--danger);
+  font-size: 14px;
+}
+
+.landing,
+.preparing,
+.result-page {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  padding: 24px;
+  max-width: 560px;
+  margin: 0 auto;
+  text-align: center;
+}
+
+.landing h1,
+.interview-room h1 {
+  font-size: 32px;
+  letter-spacing: -0.02em;
+}
+
+.subtitle {
+  color: var(--muted);
+}
+
+.github-input {
+  display: flex;
+  gap: 12px;
+  width: 100%;
+}
+
+.github-input .error {
+  width: 100%;
+  text-align: left;
+}
+
+.steps {
+  list-style: none;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: var(--muted);
+}
+
+.steps .done {
+  color: var(--success);
+}
+
+.interview-room {
+  min-height: 100vh;
+  max-width: 720px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 24px;
+  padding: 32px 24px;
+}
+
+.avatar {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.avatar-circle {
+  width: 88px;
+  height: 88px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 36px;
+}
+
+.connection-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.connection-status .dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.connection-status.connected .dot,
+.connection-status.listening .dot,
+.connection-status.speaking .dot {
+  background: var(--success);
+}
+
+.transcript {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  min-height: 240px;
+  max-height: 50vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  text-align: left;
+}
+
+.message-label {
+  font-weight: 600;
+  margin-right: 8px;
+}
+
+.message-text {
+  white-space: pre-wrap;
+}
+
+.controls {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.mic-button {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.end-button {
+  background: var(--danger);
+  color: #fff;
+}
+
+.result-page {
+  text-align: center;
+}
+
+.result {
+  width: 100%;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.score {
+  font-size: 56px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.score span {
+  font-size: 24px;
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.dimensions {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.dimension-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 14px;
+  margin-bottom: 4px;
+}
+
+.dimension-bar {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.dimension-fill {
+  height: 100%;
+  background: var(--accent);
+}
+
+.feedback {
+  color: var(--muted);
+}
+
+.lists {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  text-align: left;
+}
+
+@media (max-width: 600px) {
+  .lists {
+    grid-template-columns: 1fr;
   }
-  .imgDark {
-    display: unset;
-  }
+}
+
+.lists h3 {
+  margin-bottom: 8px;
+}
+
+.lists ul {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--muted);
 }

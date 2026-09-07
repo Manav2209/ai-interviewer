@@ -5,11 +5,12 @@
     "build": {
       "dependsOn": ["^build"],
       "inputs": ["$TURBO_DEFAULT$", ".env*"],
-      "outputs": [".next/**", "!.next/cache/**", "!.next/dev/**"]
+      "outputs": [".next/**", "!.next/cache/**", "!.next/dev/**"],
+      "env": ["NEXT_PUBLIC_BACKEND_URL"]
     },
     "lint": {
       "dependsOn": ["^lint"],
-      "env": ["NODE_ENV", "E2E_BACKEND_URL", "E2E_INTERVIEW_ID"]
+      "env": ["NODE_ENV", "E2E_BACKEND_URL", "E2E_INTERVIEW_ID", "E2E_SESSION_TOKEN", "E2E_SESSION_ROOM", "E2E_SERVER_URL", "NEXT_PUBLIC_BACKEND_URL"]
     },
     "check-types": {
       "dependsOn": ["^check-types"]
@@ -55,13 +56,15 @@
         "LIVEKIT_URL",
         "LIVEKIT_API_KEY",
         "LIVEKIT_API_SECRET",
-        "INTERNAL_API_TOKEN"
+        "INTERNAL_API_TOKEN",
+        "CORS_ALLOWED_ORIGINS"
       ],
       "envMode": "loose"
     },
     "dev": {
       "cache": false,
-      "persistent": true
+      "persistent": true,
+      "env": ["NEXT_PUBLIC_BACKEND_URL"]
     }
   }
 }

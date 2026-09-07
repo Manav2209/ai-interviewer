@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { Hono } from "hono";
+import { cors } from "hono/cors";
 import { loadConfig } from "./config.js";
 import { LlmClient } from "./llm/llm.client.js";
 import { InterviewService } from "./interview/interview.service.js";
@@ -21,6 +22,13 @@ const evaluationService = new EvaluationService(llm);
 const realtimeEvents = new RealtimeEventService();
 
 const app = new Hono();
+
+app.use(
+  "*",
+  cors({
+    origin: config.CORS_ALLOWED_ORIGINS.split(",").map((o) => o.trim()),
+  }),
+);
 
 app.get("/health", (c) => c.json({ ok: true }));
 

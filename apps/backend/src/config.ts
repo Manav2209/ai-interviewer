@@ -11,6 +11,7 @@ const envSchema = z.object({
   LIVEKIT_API_KEY: z.string().min(1),
   LIVEKIT_API_SECRET: z.string().min(1),
   INTERNAL_API_TOKEN: z.string().min(1),
+  CORS_ALLOWED_ORIGINS: z.string().default("http://localhost:3000"),
 });
 
 export type BackendConfig = z.infer<typeof envSchema>;

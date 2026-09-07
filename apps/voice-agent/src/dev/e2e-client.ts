@@ -40,6 +40,19 @@ async function resolveConnection(
   backendSession: BackendSession | null,
   livekitUrl: string,
 ): Promise<{ jwt: string; roomName: string; serverUrl: string }> {
+  // Direct join with a pre-issued backend session (Enables re-join when the
+  // interview is already "active" and the session endpoint would 409).
+  const presetToken = process.env.E2E_SESSION_TOKEN;
+  const presetRoom = process.env.E2E_SESSION_ROOM;
+  if (presetToken && presetRoom) {
+    console.log(`[e2e] joining preset backend room ${presetRoom}`);
+    return {
+      jwt: presetToken,
+      roomName: presetRoom,
+      serverUrl: process.env.E2E_SERVER_URL ?? livekitUrl,
+    };
+  }
+
   if (backendSession) {
     console.log(
       `[e2e] using backend session ${backendSession.sessionId} room=${backendSession.roomName} interview=${backendSession.interviewId}`,
