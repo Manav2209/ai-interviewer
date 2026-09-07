@@ -1,0 +1,31 @@
+{
+  "name": "@repo/voice-agent",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run src/main.ts",
+    "start": "bun run src/main.ts",
+    "build": "tsc --noEmit",
+    "check-types": "tsc --noEmit",
+    "lint": "eslint src --max-warnings 0",
+    "agent:start": "bun run src/main.ts dev"
+  },
+  "dependencies": {
+    "@livekit/agents": "^1.7.0",
+    "@livekit/agents-plugin-deepgram": "^1.7.0",
+    "@livekit/agents-plugin-openai": "^1.7.0",
+    "@livekit/agents-plugin-sarvam": "^1.6.0",
+    "@livekit/rtc-node": "^0.9.0",
+    "@repo/providers": "*",
+    "@repo/voice-types": "*",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "@repo/eslint-config": "*",
+    "@repo/typescript-config": "*",
+    "@types/node": "^22.10.0",
+    "eslint": "10.9.1",
+    "typescript": "7.0.2"
+  }
+}

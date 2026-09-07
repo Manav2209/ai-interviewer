@@ -1,0 +1,28 @@
+{
+  "name": "@repo/providers",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "check-types": "tsc --noEmit",
+    "lint": "eslint src --max-warnings 0"
+  },
+  "dependencies": {
+    "@livekit/agents": "^1.7.0",
+    "@livekit/agents-plugin-deepgram": "^1.7.0",
+    "@livekit/agents-plugin-openai": "^1.7.0",
+    "@livekit/agents-plugin-sarvam": "^1.6.0",
+    "@livekit/agents-plugin-silero": "^1.7.0",
+    "@repo/voice-types": "*"
+  },
+  "devDependencies": {
+    "@repo/eslint-config": "*",
+    "@repo/typescript-config": "*",
+    "eslint": "10.9.1",
+    "typescript": "7.0.2"
+  }
+}
