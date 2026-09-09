@@ -1,6 +1,5 @@
 import * as deepgram from "@livekit/agents-plugin-deepgram";
 import * as openai from "@livekit/agents-plugin-openai";
-import * as sarvam from "@livekit/agents-plugin-sarvam";
 import { loadConfig } from "./config.js";
 import type { VoiceProviderConfig } from "./config.js";
 export { loadConfig };
@@ -9,7 +8,7 @@ export type { VoiceProviderConfig } from "./config.js";
 export interface ProviderSet {
   stt: deepgram.STT;
   llm: openai.LLM;
-  tts: sarvam.TTS;
+  tts: deepgram.TTS;
 }
 
 export function buildProviders(cfg: VoiceProviderConfig): ProviderSet {
@@ -27,11 +26,9 @@ export function buildProviders(cfg: VoiceProviderConfig): ProviderSet {
     ...(cfg.llmTemperature !== null ? { temperature: cfg.llmTemperature } : {}),
   });
 
-  const tts = new sarvam.TTS({
-    apiKey: cfg.sarvamApiKey,
-    model: cfg.sarvamModel as "bulbul:v2" | "bulbul:v3",
-    speaker: cfg.sarvamSpeaker,
-    targetLanguageCode: cfg.sarvamTargetLanguage,
+  const tts = new deepgram.TTS({
+    apiKey: cfg.deepgramApiKey,
+    model: cfg.deepgramTtsModel,
   });
 
   return { stt, llm, tts };

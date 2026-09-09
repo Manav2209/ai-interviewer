@@ -35,6 +35,34 @@ export function createInterviewSession(
 ): InterviewSession {
   const room = new Room();
   let tracks: MediaStreamTrack[] = [];
+  const audioElements: HTMLAudioElement[] = [];
+  let unlocked = false;
+
+  function playElement(el: HTMLAudioElement): void {
+    el.muted = false;
+    el.volume = 1;
+    el.play?.().catch(() => {});
+  }
+
+  function playAll(): void {
+    for (const el of audioElements) {
+      playElement(el);
+    }
+  }
+
+  async function unlockAudio(): Promise<void> {
+    try {
+      await room.startAudio();
+    } catch {
+      // ignore autoplay unlock failures
+    }
+    if (!unlocked) {
+      unlocked = true;
+      window.removeEventListener("pointerdown", unlockAudio);
+      window.removeEventListener("keydown", unlockAudio);
+    }
+    playAll();
+  }
 
   room.on(RoomEvent.DataReceived, (_payload, _participant, _kind, topic) => {
     if (topic !== TOPIC_TRANSCRIPTION) return;
@@ -57,6 +85,29 @@ export function createInterviewSession(
     }
   });
 
+  room.on(RoomEvent.TrackSubscribed, (track) => {
+    if (track.kind !== "audio") return;
+    const attached = track.attach();
+    const elements = Array.isArray(attached) ? attached : [attached];
+    for (const el of elements) {
+      if (!audioElements.includes(el)) {
+        audioElements.push(el);
+        if (!el.isConnected) {
+          document.body.appendChild(el);
+        }
+      }
+      playElement(el);
+    }
+  });
+
+  room.on(RoomEvent.AudioPlaybackStatusChanged, () => {
+    playAll();
+  });
+
+  room.on(RoomEvent.TrackUnsubscribed, (track) => {
+    track.detach();
+  });
+
   room.on(RoomEvent.Disconnected, () => callbacks.onConnectionChange("disconnected"));
   room.on(RoomEvent.Reconnecting, () => callbacks.onConnectionChange("reconnecting"));
   room.on(RoomEvent.Reconnected, () => callbacks.onConnectionChange("connected"));
@@ -77,8 +128,12 @@ export function createInterviewSession(
 
   async function connect(): Promise<void> {
     await room.connect(url, token);
+    await room.startAudio();
     await startMicrophone();
     callbacks.onConnectionChange("connected");
+    window.addEventListener("pointerdown", unlockAudio, { once: true });
+    window.addEventListener("keydown", unlockAudio, { once: true });
+    void unlockAudio();
   }
 
   async function startMicrophone(): Promise<void> {
@@ -103,6 +158,13 @@ export function createInterviewSession(
   return {
     connect,
     async disconnect() {
+      for (const el of audioElements) {
+        el.pause?.();
+        el.remove();
+      }
+      audioElements.length = 0;
+      window.removeEventListener("pointerdown", unlockAudio);
+      window.removeEventListener("keydown", unlockAudio);
       for (const track of tracks) {
         track.stop();
       }

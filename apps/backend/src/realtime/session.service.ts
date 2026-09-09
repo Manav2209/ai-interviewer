@@ -37,24 +37,46 @@ export class SessionService {
       );
     }
 
-    // Reuse an existing active/created session for the same interview.
-    const existing = await sessionRepo.getActiveForInterview(interviewId);
+    // Reuse an existing session for the same interview. An in-flight session is
+    // rejoined as-is; a stale one is re-dispatched on the same session id so the
+    // realtime-event foreign key stays valid.
+    const existing = await sessionRepo.getLatestForInterview(interviewId);
     if (existing) {
-      const token = await this.livekit.issueCandidateToken(
-        existing.roomName,
-        `candidate-${interviewId}`,
-      );
+      if (existing.status === "created" || existing.status === "active") {
+        const token = await this.livekit.issueCandidateToken(
+          existing.roomName,
+          `candidate-${interviewId}`,
+        );
+        return {
+          interviewId,
+          sessionId: existing.id,
+          roomName: existing.roomName,
+          serverUrl: existing.serverUrl,
+          token,
+        };
+      }
+
+      await this.livekit.cleanupRoom(existing.roomName);
+      const resumed = await this.livekit.createSession({
+        roomName: existing.roomName,
+        interviewId,
+        sessionId: existing.id,
+        identity: `candidate-${interviewId}`,
+        agentName: this.agentName,
+      });
+      await sessionRepo.updateStatus(existing.id, "created");
+      await interviewRepo.updateStatus(interviewId, { status: "active" });
       return {
         interviewId,
         sessionId: existing.id,
-        roomName: existing.roomName,
-        serverUrl: existing.serverUrl,
-        token,
+        roomName: resumed.roomName,
+        serverUrl: resumed.serverUrl,
+        token: resumed.candidateToken,
       };
     }
 
     const sessionId = newSessionId();
-    const roomName = `interview-${interviewId}`;
+    const roomName = `interview-${interviewId}-${sessionId}`;
 
     const created = await this.livekit.createSession({
       roomName,

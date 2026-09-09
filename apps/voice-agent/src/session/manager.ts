@@ -16,7 +16,7 @@ export type DomainEvent =
     }
   | { type: "response.delta"; text: string; sessionId: string }
   | { type: "response.completed"; fullText: string; status: string; sessionId: string }
-  | { type: "error"; error: string; sessionId: string };
+  | { type: "error"; error: string; detail?: string; source?: string; sessionId: string };
   
 export interface SessionManagerOptions {
   agent: voice.Agent;
@@ -41,6 +41,9 @@ export class SessionManager {
       stt,
       llm,
       tts,
+      turnHandling: {
+        preemptiveGeneration: { enabled: false },
+      },
     });
 
     const emit = (ev: DomainEvent): void =>
@@ -80,8 +83,14 @@ export class SessionManager {
     });
 
     this.session.on(voice.AgentSessionEventTypes.Error, (ev) => {
-      const message = ev.error instanceof Error ? ev.error.message : String(ev.error);
-      emit({ type: "error", error: message, sessionId: this.sessionId });
+      const source = ev.source && "label" in ev.source ? String(ev.source.label) : "unknown";
+      emit({
+        type: "error",
+        error: describeError(ev),
+        detail: describeDetail(ev),
+        source,
+        sessionId: this.sessionId,
+      });
     });
 
     this.session.on(voice.AgentSessionEventTypes.Close, (ev) => {
@@ -139,4 +148,26 @@ export class SessionManager {
 
 export function createSessionManager(options: Omit<SessionManagerOptions, "agent">): SessionManager {
   return new SessionManager(options);
+}
+
+function describeError(ev: { error?: unknown }): string {
+  const value = ev.error;
+  if (value instanceof Error) return value.message;
+  if (typeof value === "string") return value;
+  if (value && typeof value === "object") {
+    const inner = (value as { error?: unknown; message?: unknown }).error;
+    const msg = (value as { message?: unknown }).message;
+    if (inner instanceof Error) return inner.message;
+    if (typeof inner === "string") return inner;
+    if (typeof msg === "string") return msg;
+  }
+  return String(value);
+}
+
+function describeDetail(ev: { error?: unknown }): string {
+  try {
+    return JSON.stringify(ev.error ?? ev);
+  } catch {
+    return "<unserializable>";
+  }
 }

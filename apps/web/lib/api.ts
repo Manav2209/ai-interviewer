@@ -37,8 +37,16 @@ export function getInterview(interviewId: string): Promise<InterviewView> {
   return request<InterviewView>(`/api/v1/interviews/${interviewId}`);
 }
 
+const inFlightSessions = new Map<string, Promise<SessionInfo>>();
+
 export function startSession(interviewId: string): Promise<SessionInfo> {
-  return request<SessionInfo>(`/api/v1/interviews/${interviewId}/session`, { method: "POST" });
+  const existing = inFlightSessions.get(interviewId);
+  if (existing) return existing;
+  const promise = request<SessionInfo>(`/api/v1/interviews/${interviewId}/session`, { method: "POST" }).finally(
+    () => inFlightSessions.delete(interviewId),
+  );
+  inFlightSessions.set(interviewId, promise);
+  return promise;
 }
 
 export function endInterview(interviewId: string): Promise<{ status: string }> {

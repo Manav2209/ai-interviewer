@@ -27,6 +27,13 @@ export class SessionRepo {
     });
   }
 
+  async getLatestForInterview(interviewId: string): Promise<InterviewSession | null> {
+    return prisma.interviewSession.findFirst({
+      where: { interviewId },
+      orderBy: { createdAt: "desc" },
+    });
+  }
+
   async updateStatus(id: string, status: SessionStatus): Promise<InterviewSession> {
     return prisma.interviewSession.update({
       where: { id },

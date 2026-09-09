@@ -22,8 +22,10 @@ Required JSON shape (no extra keys):
   "topics": string[],
   "questions": [{ "text": string, "targetSkills": string[] }]
 }
-Include 6-10 questions. At least half must be follow-up questions anchored on the project's
-actual architecture, data model, or AI logic.`;
+Include exactly 5 questions. At least half must be follow-up questions anchored on the project's
+actual architecture, data model, or AI logic.
+Each question must be a SINGLE short spoken sentence (under 20 words). No preamble, no context, no
+bullet lists — it will be read aloud by a voice agent.`;
 
 export class InterviewPlanner {
   constructor(private readonly llm: LlmClient) {}
@@ -42,11 +44,13 @@ export class InterviewPlanner {
         ? plan.difficulty
         : "mid";
 
+    const questions = Array.isArray(plan.questions) ? plan.questions.slice(0, 5) : [];
+
     return {
       role: plan.role ?? "Software Engineer",
       difficulty,
       topics: Array.isArray(plan.topics) ? plan.topics : [],
-      questions: Array.isArray(plan.questions) ? plan.questions : [],
+      questions,
     };
   }
 }

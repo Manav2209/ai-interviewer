@@ -26,6 +26,10 @@ export default function PreparingPage({ params }: { params: Promise<{ id: string
           setFailed(true);
           return;
         }
+        if (view.status === "completed") {
+          router.replace(`/interview/${interviewId}/result`);
+          return;
+        }
       } catch {
         if (!cancelled && attempts++ > 3) {
           setFailed(true);

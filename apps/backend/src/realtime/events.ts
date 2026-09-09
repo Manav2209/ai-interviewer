@@ -20,9 +20,31 @@ export type ProcessResult =
 const isFinalTranscript = (type: string, payload: RealtimeEventPayload): boolean =>
   type === "transcript.completed";
 
+const isForeignKeyViolation = (err: unknown): boolean =>
+  typeof err === "object" &&
+  err !== null &&
+  "code" in err &&
+  (err as { code?: string }).code === "P2003";
+
 export class RealtimeEventService {
   async process(input: RealtimeEventInput): Promise<ProcessResult> {
-    const created = await realtimeEventRepo.create(input);
+    const created = await realtimeEventRepo.create(input).catch(async (err) => {
+      // The session row is missing (e.g. events from an orphaned dispatch).
+      // Materialize it so the agent's event stream keeps recording instead of
+      // spamming 500s, then retry the insert once.
+      if (isForeignKeyViolation(err)) {
+        await sessionRepo
+          .create({
+            id: input.sessionId,
+            interviewId: input.interviewId,
+            roomName: `interview-${input.interviewId}-${input.sessionId}`,
+            serverUrl: "",
+          })
+          .catch(() => {});
+        return realtimeEventRepo.create(input);
+      }
+      throw err;
+    });
     if (!created) {
       return { outcome: "duplicate" };
     }

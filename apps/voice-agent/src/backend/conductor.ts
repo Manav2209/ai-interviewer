@@ -70,7 +70,11 @@ export class InterviewConductor {
         this.post("session.completed", {});
         break;
       case "error":
-        this.post("error", { error: ev.error });
+        this.post("error", {
+          error: ev.error,
+          detail: ev.detail,
+          source: ev.source,
+        });
         break;
       default:
         break;

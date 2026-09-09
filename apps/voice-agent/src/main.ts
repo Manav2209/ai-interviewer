@@ -101,7 +101,14 @@ export default defineAgent({
     try {
       await session.say(greeting);
     } catch (err) {
-      logger.error({ event: "error", error: String(err) }, "initial greeting failed");
+      logger.error(
+        {
+          event: "error",
+          error: err instanceof Error ? err.message : String(err),
+          data: describeSafely(err),
+        },
+        "initial greeting failed",
+      );
     }
 
     ctx.addShutdownCallback(async () => {
@@ -112,3 +119,20 @@ export default defineAgent({
 });
 
 cli.runApp(new ServerOptions({ agent: fileURLToPath(import.meta.url) }));
+
+function describeSafely(value: unknown): string {
+  try {
+    if (value instanceof Error) {
+      const extra = (value as Error & { cause?: unknown }).cause;
+      return JSON.stringify({
+        name: value.name,
+        message: value.message,
+        stack: value.stack,
+        cause: extra instanceof Error ? extra.message : extra,
+      });
+    }
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}

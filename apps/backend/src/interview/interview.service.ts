@@ -26,15 +26,6 @@ export class InterviewService {
   async create(githubUrl: string): Promise<{ id: string; status: InterviewStatus }> {
     const { owner, name, url } = GithubScraper.parseGithubUrl(githubUrl);
 
-    // If a ready interview already exists for this repo URL, prefer it.
-    const existing = await prisma.interview.findFirst({
-      where: { githubUrl: url, status: { not: "failed" } },
-      orderBy: { createdAt: "desc" },
-    });
-    if (existing) {
-      return { id: existing.id, status: existing.status };
-    }
-
     const interview = await interviewRepo.create({
       id: newId("int"),
       githubUrl: url,

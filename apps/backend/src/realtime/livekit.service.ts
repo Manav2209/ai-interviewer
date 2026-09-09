@@ -85,6 +85,20 @@ export class LiveKitService {
     return dispatch.id;
   }
 
+  async cleanupRoom(roomName: string): Promise<void> {
+    // Remove stale dispatches first so an orphaned agent job never re-attaches
+    // to a room when a new session starts.
+    try {
+      const dispatch = await this.dispatcher.listDispatch(roomName);
+      for (const d of dispatch) {
+        await this.dispatcher.deleteDispatch(d.id, roomName).catch(() => {});
+      }
+    } catch {
+      // room or dispatches unknown; nothing to clean
+    }
+    await this.rooms.deleteRoom(roomName).catch(() => {});
+  }
+
   async createSession(options: {
     roomName: string;
     interviewId: string;
