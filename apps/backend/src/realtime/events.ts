@@ -1,100 +1,202 @@
-import { realtimeEventRepo, type RealtimeEventInput } from "../db/repositories/realtime-event.repo.js";
-import { turnRepo } from "../db/repositories/turn.repo.js";
-import { sessionRepo } from "../db/repositories/session.repo.js";
-import { interviewRepo } from "../db/repositories/interview.repo.js";
-import type { TurnRole } from "@prisma/client";
+import { Prisma } from "@prisma/client";
+import { z } from "zod";
+import { prisma } from "../db/client.js";
+import type { RealtimeEventInput } from "../db/repositories/realtime-event.repo.js";
+import { domainEvent } from "../observability/events.js";
+import { withInterviewLock } from "../interview/runtime-lock.js";
+import { stateSchema } from "../interview/schemas.js";
 
-export interface RealtimeEventPayload {
-  role?: "user" | "assistant";
-  text?: string;
-  turnId?: string;
-  turnIndex?: number;
-  completedAt?: string;
-  error?: string;
+export const realtimeEventSchema = z
+  .object({
+    eventId: z.string().min(1).max(100),
+    interviewId: z.string().min(1).max(100),
+    sessionId: z.string().min(1).max(100),
+    type: z.enum([
+      "session.started",
+      "session.disconnected",
+      "session.failed",
+      "session.heartbeat",
+      "transcript.completed",
+      "speech.interrupted",
+      "voice.metrics",
+      "error",
+    ]),
+    timestamp: z.string().datetime(),
+    payload: z
+      .object({
+        role: z.literal("assistant").optional(),
+        text: z.string().max(1000).optional(),
+        turnId: z.string().max(100).optional(),
+        questionId: z.string().max(100).optional(),
+        turnIndex: z.number().int().nonnegative().optional(),
+        interrupted: z.boolean().optional(),
+        completedAt: z.string().datetime().optional(),
+        error: z.string().max(1000).optional(),
+        detail: z.string().max(2000).optional(),
+        source: z.string().max(100).optional(),
+        durationMs: z.number().finite().nonnegative().optional(),
+        firstAudioMs: z.number().finite().nonnegative().optional(),
+      })
+      .default({}),
+  })
+  .superRefine((event, ctx) => {
+    if (
+      event.type === "transcript.completed" &&
+      (!event.payload.turnId ||
+        !event.payload.text ||
+        event.payload.role !== "assistant")
+    )
+      ctx.addIssue({
+        code: "custom",
+        message: "Assistant transcript fields required",
+      });
+  });
+
+export type ProcessResult = {
+  outcome: "created" | "duplicate";
+  turnCreated?: boolean;
+};
+export async function requireSession(
+  interviewId: string,
+  sessionId: string,
+): Promise<void> {
+  if (
+    !(await prisma.interviewSession.findFirst({
+      where: { id: sessionId, interviewId },
+    }))
+  )
+    throw new Error("Invalid interview session");
 }
-
-export type ProcessResult =
-  | { outcome: "created"; turnCreated?: boolean }
-  | { outcome: "duplicate" };
-
-const isFinalTranscript = (type: string, payload: RealtimeEventPayload): boolean =>
-  type === "transcript.completed";
-
-const isForeignKeyViolation = (err: unknown): boolean =>
-  typeof err === "object" &&
-  err !== null &&
-  "code" in err &&
-  (err as { code?: string }).code === "P2003";
 
 export class RealtimeEventService {
   async process(input: RealtimeEventInput): Promise<ProcessResult> {
-    const created = await realtimeEventRepo.create(input).catch(async (err) => {
-      // The session row is missing (e.g. events from an orphaned dispatch).
-      // Materialize it so the agent's event stream keeps recording instead of
-      // spamming 500s, then retry the insert once.
-      if (isForeignKeyViolation(err)) {
-        await sessionRepo
-          .create({
-            id: input.sessionId,
-            interviewId: input.interviewId,
-            roomName: `interview-${input.interviewId}-${input.sessionId}`,
-            serverUrl: "",
-          })
-          .catch(() => {});
-        return realtimeEventRepo.create(input);
-      }
-      throw err;
-    });
-    if (!created) {
+    const event = realtimeEventSchema.parse(input);
+    await requireSession(event.interviewId, event.sessionId);
+    if (
+      await prisma.realtimeEvent.findUnique({
+        where: { eventId: event.eventId },
+      })
+    )
       return { outcome: "duplicate" };
-    }
-
-    const payload = (input.payload ?? {}) as RealtimeEventPayload;
-
-    if (isFinalTranscript(input.type, payload)) {
-      const role = payload.role === "assistant" ? ("assistant" as TurnRole) : ("user" as TurnRole);
-      const text = payload.text?.trim() ?? "";
-      if (text.length > 0 && payload.turnId) {
-        try {
-          await turnRepo.create({
-            id: payload.turnId,
-            interviewId: input.interviewId,
-            sessionId: input.sessionId,
-            turnIndex: payload.turnIndex ?? 0,
-            role,
-            text,
-            completedAt: payload.completedAt ? new Date(payload.completedAt) : undefined,
+    const persist = async (token?: string): Promise<ProcessResult> =>
+      prisma.$transaction(async (tx) => {
+        if (
+          await tx.realtimeEvent.findUnique({
+            where: { eventId: event.eventId },
+          })
+        )
+          return { outcome: "duplicate" };
+        let turnCreated = false;
+        if (event.type === "transcript.completed") {
+          const runtime = await tx.interviewRuntime.findUniqueOrThrow({
+            where: { interviewId: event.interviewId },
           });
-          return { outcome: "created", turnCreated: true };
-        } catch (err) {
-          // Duplicate turnId already stored -> final transcript already persisted.
+          const state = stateSchema.parse(runtime.data);
+          const question = state.questions.find(
+            (q) => q.id === event.payload.questionId,
+          );
+          if (!question && (!state.ended || event.payload.questionId))
+            throw new Error("Unknown spoken question");
+          const prior = await tx.conversationTurn.findUnique({
+            where: { id: event.payload.turnId! },
+          });
           if (
-            typeof err === "object" &&
-            err !== null &&
-            "code" in err &&
-            (err as { code?: string }).code === "P2002"
-          ) {
-            return { outcome: "created" };
+            prior &&
+            (prior.interviewId !== event.interviewId ||
+              prior.sessionId !== event.sessionId ||
+              prior.text !== event.payload.text)
+          )
+            throw new Error("Transcript ID conflicts with existing turn");
+          if (!prior) {
+            await tx.conversationTurn.create({
+              data: {
+                id: event.payload.turnId!,
+                interviewId: event.interviewId,
+                sessionId: event.sessionId,
+                questionId: question?.id,
+                role: "assistant",
+                text: event.payload.text!,
+                turnIndex: await tx.conversationTurn.count({
+                  where: { interviewId: event.interviewId },
+                }),
+                analysisStatus: "skipped",
+                completedAt: new Date(
+                  event.payload.completedAt ?? event.timestamp,
+                ),
+              },
+            });
+            turnCreated = true;
           }
-          throw err;
+          if (
+            question &&
+            !event.payload.interrupted &&
+            event.payload.text?.trim() === question.text.trim()
+          )
+            question.spokenAt = new Date().toISOString();
+          const saved = await tx.interviewRuntime.updateMany({
+            where: {
+              interviewId: event.interviewId,
+              version: runtime.version,
+              leaseToken: token,
+            },
+            data: {
+              version: { increment: 1 },
+              data: state as unknown as Prisma.InputJsonValue,
+            },
+          });
+          if (!saved.count)
+            throw new Error("State changed during transcript persistence");
         }
-      }
-    }
-
-    if (input.type === "session.started") {
-      await sessionRepo.registerStarted(input.sessionId).catch(() => {});
-    } else if (input.type === "session.completed") {
-      await sessionRepo.registerCompleted(input.sessionId).catch(() => {});
-    } else if (input.type === "session.failed") {
-      await sessionRepo.registerFailed(input.sessionId).catch(() => {});
-      await interviewRepo
-        .updateStatus(input.interviewId, {
-          status: "failed",
-          error: payload.error ?? "voice agent reported a session failure",
-        })
-        .catch(() => {});
-    }
-
-    return { outcome: "created" };
+        const session = await tx.interviewSession.findUniqueOrThrow({
+          where: { id: event.sessionId },
+        });
+        if (["created", "active"].includes(session.status)) {
+          if (["session.started", "session.heartbeat"].includes(event.type))
+            await tx.interviewSession.update({
+              where: { id: session.id },
+              data: {
+                status: "active",
+                startedAt: session.startedAt ?? new Date(),
+                heartbeatAt: new Date(),
+                disconnectedAt: null,
+              },
+            });
+          if (["session.disconnected", "session.failed"].includes(event.type))
+            await tx.interviewSession.update({
+              where: { id: session.id },
+              data: {
+                status: "created",
+                disconnectedAt: session.disconnectedAt ?? new Date(),
+              },
+            });
+        }
+        await tx.realtimeEvent.create({
+          data: {
+            ...event,
+            timestamp: new Date(event.timestamp),
+            payload: event.payload as Prisma.InputJsonValue,
+          },
+        });
+        await tx.interviewEvent.create({
+          data: domainEvent(
+            event.interviewId,
+            event.type === "voice.metrics"
+              ? `voice.${event.payload.source}`
+              : `voice.${event.type}`,
+            {
+              sessionId: event.sessionId,
+              questionId: event.payload.questionId,
+              interrupted: event.payload.interrupted,
+              source: event.payload.source,
+              durationMs: event.payload.durationMs,
+              firstAudioMs: event.payload.firstAudioMs,
+            },
+          ),
+        });
+        return { outcome: "created", turnCreated };
+      });
+    return event.type === "transcript.completed"
+      ? withInterviewLock(event.interviewId, persist)
+      : persist();
   }
 }

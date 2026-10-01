@@ -1,17 +1,26 @@
 export interface EvaluationDimensions {
-  technicalKnowledge: number;
-  problemSolving: number;
-  communication: number;
-  projectUnderstanding: number;
-  depth: number;
+  technicalKnowledge: number | null;
+  problemSolving: number | null;
+  communication: number | null;
+  projectUnderstanding: number | null;
+  depth: number | null;
 }
 
 export interface Evaluation {
-  score: number;
+  score: number | null;
   dimensions: EvaluationDimensions;
   strengths: string[];
   weaknesses: string[];
   feedback: string;
+  evidence: Record<
+    string,
+    {
+      level: string;
+      confidence: number;
+      evidenceIds: string[];
+      explanation: string;
+    }
+  >;
 }
 
 export interface EvaluationContext {
@@ -28,7 +37,21 @@ export interface EvaluationContext {
     role: string;
     difficulty: string;
     topics: string[];
-    questions: { text: string; targetSkills: string[] }[];
+    objectives: {
+      id: string;
+      topic: string;
+      description: string;
+      status?: string;
+    }[];
   };
-  transcript: { role: "user" | "assistant"; text: string }[];
+  transcript: { id: string; role: "user" | "assistant"; text: string }[];
+  candidateEvidence: import("../interview/interview.types.js").CandidateEvidence[];
+  claims?: import("../interview/interview.types.js").CandidateClaim[];
+  skills?: Record<string, import("../interview/interview.types.js").SkillState>;
+  questionHistory: {
+    id: string;
+    text: string;
+    objectiveId: string;
+    reason: string;
+  }[];
 }

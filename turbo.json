@@ -1,6 +1,15 @@
 {
   "$schema": "https://turborepo.dev/schema.json",
   "ui": "tui",
+  "globalPassThroughEnv": [
+    "VOICE_OUTBOX_DIR",
+    "LANGFUSE_BASE_URL",
+    "LANGFUSE_PUBLIC_KEY",
+    "LANGFUSE_SECRET_KEY",
+    "GITHUB_TOKEN",
+    "INTERVIEW_DURATION_MINUTES",
+    "RECONNECT_WINDOW_SECONDS"
+  ],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
@@ -10,7 +19,15 @@
     },
     "lint": {
       "dependsOn": ["^lint"],
-      "env": ["NODE_ENV", "E2E_BACKEND_URL", "E2E_INTERVIEW_ID", "E2E_SESSION_TOKEN", "E2E_SESSION_ROOM", "E2E_SERVER_URL", "NEXT_PUBLIC_BACKEND_URL"]
+      "env": [
+        "NODE_ENV",
+        "E2E_BACKEND_URL",
+        "E2E_INTERVIEW_ID",
+        "E2E_SESSION_TOKEN",
+        "E2E_SESSION_ROOM",
+        "E2E_SERVER_URL",
+        "NEXT_PUBLIC_BACKEND_URL"
+      ]
     },
     "check-types": {
       "dependsOn": ["^check-types"]
@@ -27,6 +44,7 @@
         "ROOM_NAME",
         "DEEPGRAM_API_KEY",
         "DEEPGRAM_MODEL",
+        "DEEPGRAM_TTS_MODEL",
         "DEEPGRAM_UTTERANCE_END_MS",
         "AI_ROUTER_BASE_URL",
         "AI_ROUTER_API_KEY",

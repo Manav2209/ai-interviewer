@@ -1,19 +1,15 @@
-import {
-  voice,
-  type ChatContext,
-  type ChatChunk,
-  type ModelSettings,
-  type ToolContext,
-} from "@livekit/agents";
+import { voice, type ChatContext } from "@livekit/agents";
 
 export interface AgentOptions {
   instructions: string;
+  nextQuestion: (turnId: string, answer: string) => Promise<string>;
   onResponseDelta?: (text: string) => void;
   onResponseError?: (reason: string) => void;
 }
 
 export function buildAgent({
   instructions,
+  nextQuestion,
   onResponseDelta,
   onResponseError,
 }: AgentOptions): voice.Agent {
@@ -21,48 +17,22 @@ export function buildAgent({
     instructions,
 
     async *llmNode(
-      ctx: voice.AgentContext,
+      _ctx: voice.AgentContext,
       chatCtx: ChatContext,
-      toolCtx: ToolContext,
-      modelSettings: ModelSettings,
-    ): AsyncGenerator<ChatChunk | string> {
-      const stream = await voice.Agent.default.llmNode(
-        ctx.agent,
-        chatCtx,
-        toolCtx,
-        modelSettings,
-      );
-      if (!stream) {
-        onResponseError?.("llmNode returned no stream");
-        return;
-      }
-
-      const reader = stream.getReader();
+    ): AsyncGenerator<string> {
       try {
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          if (typeof value === "string") {
-            if (value.length > 0) {
-              onResponseDelta?.(value);
-            }
-            yield value;
-            continue;
-          }
-
-          const text = value.delta?.content;
-          if (text) {
-            onResponseDelta?.(text);
-          }
-          yield value;
-        }
+        const last = [...chatCtx.items]
+          .reverse()
+          .find((item) => item.type === "message" && item.role === "user");
+        if (!last || last.type !== "message" || !last.textContent?.trim())
+          return;
+        const question = await nextQuestion(last.id, last.textContent.trim());
+        onResponseDelta?.(question);
+        yield question;
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
         onResponseError?.(reason);
-        throw err;
-      } finally {
-        reader.releaseLock();
+        yield "Sorry, I couldn't process that answer. Please repeat it in a moment.";
       }
     },
   });

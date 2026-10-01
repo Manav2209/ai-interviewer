@@ -1,0 +1,15 @@
+ALTER TABLE "Interview" ADD COLUMN "userId" TEXT;
+ALTER TABLE "InterviewRuntime" ADD COLUMN "leaseToken" TEXT, ADD COLUMN "leaseUntil" TIMESTAMP(3);
+ALTER TABLE "InterviewSession" ADD COLUMN "disconnectedAt" TIMESTAMP(3), ADD COLUMN "heartbeatAt" TIMESTAMP(3);
+ALTER TABLE "ConversationTurn" ADD COLUMN "questionId" TEXT, ADD COLUMN "analysisStatus" TEXT NOT NULL DEFAULT 'pending', ADD COLUMN "analysisError" TEXT;
+CREATE TABLE "BrowserUser" ("id" TEXT PRIMARY KEY);
+CREATE TABLE "BrowserAccessSession" ("id" TEXT PRIMARY KEY, "userId" TEXT NOT NULL REFERENCES "BrowserUser"("id") ON DELETE CASCADE, "tokenHash" TEXT NOT NULL UNIQUE, "expiresAt" TIMESTAMP(3) NOT NULL);
+ALTER TABLE "Interview" ADD CONSTRAINT "Interview_userId_fkey" FOREIGN KEY ("userId") REFERENCES "BrowserUser"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+CREATE TABLE "RepositoryKnowledge" ("interviewId" TEXT PRIMARY KEY REFERENCES "Interview"("id") ON DELETE CASCADE, "commitSha" TEXT NOT NULL, "files" JSONB NOT NULL, "symbols" JSONB NOT NULL, "facts" JSONB NOT NULL);
+CREATE TABLE "InterviewEvent" ("id" TEXT PRIMARY KEY, "interviewId" TEXT NOT NULL REFERENCES "Interview"("id") ON DELETE CASCADE, "type" TEXT NOT NULL, "payload" JSONB NOT NULL, "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, "exportedAt" TIMESTAMP(3));
+CREATE INDEX "InterviewEvent_interviewId_createdAt_idx" ON "InterviewEvent"("interviewId", "createdAt");
+CREATE INDEX "InterviewEvent_exportedAt_idx" ON "InterviewEvent"("exportedAt");
+CREATE TABLE "InterviewJob" ("id" TEXT PRIMARY KEY, "interviewId" TEXT NOT NULL REFERENCES "Interview"("id") ON DELETE CASCADE, "kind" TEXT NOT NULL, "key" TEXT NOT NULL UNIQUE, "payload" JSONB NOT NULL, "status" TEXT NOT NULL DEFAULT 'pending', "attempts" INTEGER NOT NULL DEFAULT 0, "runAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, "leaseToken" TEXT, "leaseUntil" TIMESTAMP(3), "error" TEXT);
+CREATE INDEX "InterviewJob_status_runAt_idx" ON "InterviewJob"("status", "runAt");
+CREATE TABLE "RateLimitBucket" ("id" TEXT PRIMARY KEY, "count" INTEGER NOT NULL, "resetAt" TIMESTAMP(3) NOT NULL);
+CREATE INDEX "RateLimitBucket_resetAt_idx" ON "RateLimitBucket"("resetAt");

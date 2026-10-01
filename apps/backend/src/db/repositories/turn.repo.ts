@@ -27,7 +27,7 @@ export class TurnRepo {
   async listForInterview(interviewId: string): Promise<ConversationTurn[]> {
     return prisma.conversationTurn.findMany({
       where: { interviewId },
-      orderBy: { turnIndex: "asc" },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     });
   }
 }

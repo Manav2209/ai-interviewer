@@ -20,7 +20,10 @@ export function createInterviewsRouter(service: InterviewService): Hono {
     }
 
     try {
-      const { id, status } = await service.create(parsed.data.githubUrl);
+      const { id, status } = await service.create(
+        parsed.data.githubUrl,
+        c.get("userId"),
+      );
       return c.json({ interviewId: id, status }, 201);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -39,9 +42,6 @@ export function createInterviewsRouter(service: InterviewService): Hono {
       status: interview.status,
       githubUrl: interview.githubUrl,
       error: interview.error ?? undefined,
-      githubContext: interview.githubContext,
-      interviewPlan: interview.interviewPlan,
-      systemPrompt: interview.systemPrompt,
       createdAt: interview.createdAt,
     });
   });

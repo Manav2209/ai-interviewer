@@ -8,6 +8,7 @@ export interface GithubRepositoryInfo {
   stars?: number;
   forks?: number;
   cloneUrl?: string;
+  commitSha?: string;
 }
 
 export interface GithubFile {
@@ -26,6 +27,7 @@ export interface ScrapedGithubRepo {
   tree: GithubFile[];
   manifests: GithubDependencyManifest[];
   readme?: string;
+  sources?: { path: string; content: string }[];
   recentCommits: {
     message: string;
     author: string;
@@ -39,6 +41,7 @@ export interface GithubContext {
     name: string;
     url: string;
     description?: string;
+    commitSha?: string;
   };
   languages: string[];
   technologies: string[];
@@ -53,8 +56,23 @@ export interface GithubContext {
     content?: string;
   }[];
   projectSummary: string;
+  services?: string[];
+  databases?: string[];
+  APIs?: string[];
+  infrastructure?: string[];
+  interestingTopics?: { topic: string; reason: string; difficulty: string }[];
   evidence: {
     claim: string;
     source: string;
   }[];
+}
+
+export interface IndexedFile {
+  path: string;
+  content: string;
+}
+export interface IndexedSymbol {
+  name: string;
+  path: string;
+  line: number;
 }

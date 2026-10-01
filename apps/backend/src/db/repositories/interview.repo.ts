@@ -29,15 +29,20 @@ export class InterviewRepo {
     });
   }
 
-  async updateStatus(id: string, input: UpdateInterviewStatusInput): Promise<Interview> {
+  async updateStatus(
+    id: string,
+    input: UpdateInterviewStatusInput,
+  ): Promise<Interview> {
     return prisma.interview.update({
       where: { id },
       data: {
         status: input.status,
         error: input.error,
-        startedAt: input.status === "analyzing" ? new Date() : undefined,
+        startedAt: input.status === "active" ? new Date() : undefined,
         completedAt:
-          input.status === "ready" || input.status === "failed" ? new Date() : undefined,
+          input.status === "completed" || input.status === "failed"
+            ? new Date()
+            : undefined,
       },
     });
   }
@@ -49,7 +54,7 @@ export class InterviewRepo {
         status: "ready",
         systemPrompt,
         error: null,
-        completedAt: new Date(),
+        completedAt: null,
       },
     });
   }

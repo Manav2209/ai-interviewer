@@ -3,11 +3,12 @@ import { Prisma } from "@prisma/client";
 import { GithubScraper } from "../github/github.scraper.js";
 import { GithubAnalyzer } from "../github/github.analyzer.js";
 import { InterviewPlanner } from "./interview.planner.js";
-import { buildSystemPrompt } from "./interview.prompt.js";
 import type { LlmClient } from "../llm/llm.client.js";
 import { newId } from "../lib/ids.js";
 import { interviewRepo } from "../db/repositories/interview.repo.js";
 import type { InterviewStatus } from "@prisma/client";
+import { storeKnowledge } from "../github/knowledge.js";
+import { withTrace } from "../observability/events.js";
 
 type InterviewWithContext = Prisma.InterviewGetPayload<{
   include: { githubContext: true; interviewPlan: true };
@@ -23,17 +24,34 @@ export class InterviewService {
     this.planner = new InterviewPlanner(llm);
   }
 
-  async create(githubUrl: string): Promise<{ id: string; status: InterviewStatus }> {
+  async create(
+    githubUrl: string,
+    userId: string,
+  ): Promise<{ id: string; status: InterviewStatus }> {
     const { owner, name, url } = GithubScraper.parseGithubUrl(githubUrl);
 
-    const interview = await interviewRepo.create({
-      id: newId("int"),
-      githubUrl: url,
-      owner,
-      name,
+    const interview = await prisma.$transaction(async (tx) => {
+      const row = await tx.interview.create({
+        data: {
+          id: newId("int"),
+          githubUrl: url,
+          owner,
+          name,
+          userId,
+          status: "analyzing",
+        },
+      });
+      await tx.interviewJob.create({
+        data: {
+          id: newId("job"),
+          interviewId: row.id,
+          kind: "PREPARE",
+          key: `PREPARE:${row.id}`,
+          payload: {},
+        },
+      });
+      return row;
     });
-
-    void this.runPipeline(interview.id);
 
     return { id: interview.id, status: "analyzing" };
   }
@@ -42,15 +60,19 @@ export class InterviewService {
     return interviewRepo.getWithContext(id);
   }
 
-  private async runPipeline(id: string): Promise<void> {
+  async runPipeline(id: string): Promise<void> {
     try {
-      await interviewRepo.updateStatus(id, { status: "analyzing" });
-
       const interview = await interviewRepo.getById(id);
       if (!interview) throw new Error(`Interview ${id} not found`);
+      if (interview.status !== "analyzing") return;
 
-      const scraped = await this.scraper.scrape(interview.owner, interview.name);
-      const context = await this.analyzer.analyze(scraped);
+      const scraped = await withTrace(id, "repository_retrieval", () =>
+        this.scraper.scrape(interview.owner, interview.name),
+      );
+      const context = await withTrace(id, "repository_analysis", () =>
+        this.analyzer.analyze(scraped),
+      );
+      await storeKnowledge(id, scraped, context);
 
       await prisma.githubContext.upsert({
         where: { interviewId: id },
@@ -77,8 +99,9 @@ export class InterviewService {
         },
       });
 
-      const plan = await this.planner.plan(context);
-      const systemPrompt = buildSystemPrompt(context, plan);
+      const plan = await withTrace(id, "interview_planning", () =>
+        this.planner.plan(context),
+      );
 
       await prisma.interviewPlan.upsert({
         where: { interviewId: id },
@@ -87,21 +110,23 @@ export class InterviewService {
           role: plan.role,
           difficulty: plan.difficulty,
           topics: plan.topics as unknown as Prisma.InputJsonValue,
-          questions: plan.questions as unknown as Prisma.InputJsonValue,
+          questions: [],
+          objectives: plan.objectives as unknown as Prisma.InputJsonValue,
         },
         update: {
           role: plan.role,
           difficulty: plan.difficulty,
           topics: plan.topics as unknown as Prisma.InputJsonValue,
-          questions: plan.questions as unknown as Prisma.InputJsonValue,
+          questions: [],
+          objectives: plan.objectives as unknown as Prisma.InputJsonValue,
         },
       });
 
-      await interviewRepo.markReady(id, systemPrompt);
+      await interviewRepo.markReady(id, "");
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error(`[interview:${id}] pipeline failed: ${message}`);
-      await interviewRepo.updateStatus(id, { status: "failed", error: message });
+      throw err;
     }
   }
 }

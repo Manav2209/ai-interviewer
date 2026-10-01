@@ -1,18 +1,18 @@
 export type InterviewStatus =
   | "preparing"
+  | "created"
+  | "analyzing"
   | "ready"
   | "connecting"
   | "active"
   | "ending"
+  | "completing"
+  | "evaluation_failed"
   | "completed"
   | "failed";
 
 export type ConnectionStatus =
-  | "disconnected"
-  | "connecting"
-  | "connected"
-  | "reconnecting"
-  | "failed";
+  "disconnected" | "connecting" | "connected" | "reconnecting" | "failed";
 
 export interface TranscriptMessage {
   id: string;
@@ -32,11 +32,20 @@ export interface SessionInfo {
 
 export interface InterviewResult {
   status: string;
-  score: number;
-  dimensions: Record<string, number>;
+  score: number | null;
+  dimensions: Record<string, number | null>;
   strengths: string[];
   weaknesses: string[];
   feedback: string;
+  evidence?: Record<
+    string,
+    {
+      level: string;
+      confidence: number;
+      evidenceIds: string[];
+      explanation: string;
+    }
+  >;
   message?: string;
 }
 

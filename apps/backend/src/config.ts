@@ -12,11 +12,28 @@ const envSchema = z.object({
   LIVEKIT_API_SECRET: z.string().min(1),
   INTERNAL_API_TOKEN: z.string().min(1),
   CORS_ALLOWED_ORIGINS: z.string().default("http://localhost:3000"),
+  INTERVIEW_DURATION_MINUTES: z.coerce
+    .number()
+    .int()
+    .min(5)
+    .max(60)
+    .default(30),
+  RECONNECT_WINDOW_SECONDS: z.coerce
+    .number()
+    .int()
+    .min(30)
+    .max(900)
+    .default(300),
+  LANGFUSE_BASE_URL: z.string().url().optional(),
+  LANGFUSE_PUBLIC_KEY: z.string().optional(),
+  LANGFUSE_SECRET_KEY: z.string().optional(),
 });
 
 export type BackendConfig = z.infer<typeof envSchema>;
 
-export function loadConfig(env: NodeJS.ProcessEnv = process.env): BackendConfig {
+export function loadConfig(
+  env: NodeJS.ProcessEnv = process.env,
+): BackendConfig {
   const parsed = envSchema.safeParse(env);
   if (!parsed.success) {
     const issues = parsed.error.issues

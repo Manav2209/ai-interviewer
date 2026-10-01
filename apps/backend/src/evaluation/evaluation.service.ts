@@ -1,116 +1,264 @@
-import { interviewRepo } from "../db/repositories/interview.repo.js";
-import { turnRepo } from "../db/repositories/turn.repo.js";
-import { sessionRepo } from "../db/repositories/session.repo.js";
-import { evaluationRepo, type EvaluationDimensions } from "../db/repositories/evaluation.repo.js";
-import { Evaluator } from "./evaluator.js";
+import { Prisma } from "@prisma/client";
+import { prisma } from "../db/client.js";
+import { Evaluator, emptyEvaluation } from "./evaluator.js";
 import type { LlmClient } from "../llm/llm.client.js";
-import type { TurnRole } from "@prisma/client";
+import { stateSchema } from "../interview/schemas.js";
+import { withInterviewLock } from "../interview/runtime-lock.js";
+import { domainEvent, withTrace } from "../observability/events.js";
+import { enqueue } from "../jobs/queue.js";
+import { newId } from "../lib/ids.js";
 
 export class EvaluationService {
   private readonly evaluator: Evaluator;
-
   constructor(llm: LlmClient) {
     this.evaluator = new Evaluator(llm);
   }
 
-  /**
-   * Runs evaluation for a completed interview. Never throws for evaluation
-   * failures — the interview result is preserved and the evaluation is stored
-   * with status "failed" (retryable).
-   */
-  async evaluateAndStore(interviewId: string): Promise<{ status: "completed" | "failed" }> {
-    try {
-      const interview = await interviewRepo.getWithContext(interviewId);
-      if (!interview) {
-        return { status: "failed" };
-      }
-
-      const turns = await turnRepo.listForInterview(interviewId);
-      if (turns.length < 2) {
-        await this.storeFailure(interviewId, "Not enough conversation to evaluate.");
-        return { status: "failed" };
-      }
-
-      const context = interview.githubContext;
-      const plan = interview.interviewPlan;
-      if (!context || !plan) {
-        await this.storeFailure(interviewId, "Missing project context or interview plan.");
-        return { status: "failed" };
-      }
-
-      const evaluation = await this.evaluator.evaluate({
-        projectContext: {
-          owner: (context.repository as { owner?: string }).owner ?? interview.owner,
-          name: (context.repository as { name?: string }).name ?? interview.name,
-          projectSummary: context.projectSummary,
-          technologies: context.technologies,
-          architecture: JSON.stringify(context.architecture),
-          importantFiles: (
-            context.importantFiles as unknown as { path: string; reason: string }[]
-          ).map((f) => ({ path: f.path, reason: f.reason })),
-          evidence: (context.evidence as unknown as { claim: string; source: string }[]).map(
-            (e) => ({ claim: e.claim, source: e.source }),
-          ),
-        },
-        plan: {
-          role: plan.role,
-          difficulty: plan.difficulty,
-          topics: plan.topics as unknown as string[],
-          questions: (
-            plan.questions as unknown as { text: string; targetSkills: string[] }[]
-          ).map((q) => ({ text: q.text, targetSkills: q.targetSkills })),
-        },
-        transcript: turns.map((t) => ({
-          role: t.role as TurnRole === "user" ? "user" : "assistant",
-          text: t.text,
-        })),
+  async finalize(
+    interviewId: string,
+  ): Promise<{ status: "completed" | "failed" | "pending" }> {
+    const result = await prisma.evaluation.findUnique({
+      where: { interviewId },
+    });
+    if (result?.status === "completed") return { status: "completed" };
+    const interview = await prisma.interview.findUniqueOrThrow({
+      where: { id: interviewId },
+    });
+    if (interview.status === "evaluation_failed") return { status: "failed" };
+    await prisma.$transaction(async (tx) => {
+      await tx.interview.updateMany({
+        where: { id: interviewId, status: "active" },
+        data: { status: "completing" },
       });
-
-      await evaluationRepo.create({
-        interviewId,
-        score: evaluation.score,
-        dimensions: evaluation.dimensions as EvaluationDimensions,
-        strengths: evaluation.strengths,
-        weaknesses: evaluation.weaknesses,
-        feedback: evaluation.feedback,
+      await tx.interviewJob.upsert({
+        where: { key: `END:${interviewId}` },
+        create: {
+          id: newId("job"),
+          interviewId,
+          kind: "END",
+          key: `END:${interviewId}`,
+          payload: { reason: "candidate_requested" },
+        },
+        update: {},
       });
+    });
+    return { status: "pending" };
+  }
+
+  async prepareFinalization(
+    interviewId: string,
+    reason = "completed",
+  ): Promise<void> {
+    await withInterviewLock(interviewId, async (token) => {
+      const runtime = await prisma.interviewRuntime.findUniqueOrThrow({
+        where: { interviewId },
+      });
+      const state = stateSchema.parse(runtime.data);
+      state.ended = true;
+      state.endReason ??= reason;
+      state.phase = "FINAL";
+      await prisma.$transaction(async (tx) => {
+        const changed = await tx.interview.updateMany({
+          where: { id: interviewId, status: { in: ["active", "completing"] } },
+          data: { status: "completing" },
+        });
+        if (!changed.count) return;
+        const saved = await tx.interviewRuntime.updateMany({
+          where: { interviewId, leaseToken: token, version: runtime.version },
+          data: {
+            data: state as unknown as Prisma.InputJsonValue,
+            version: { increment: 1 },
+          },
+        });
+        if (!saved.count)
+          throw new Error("Interview state changed during finalization");
+        await tx.interviewSession.updateMany({
+          where: { interviewId, status: { in: ["active", "created"] } },
+          data: { status: "completed", endedAt: new Date() },
+        });
+        await tx.interviewJob.upsert({
+          where: { key: `EVALUATE:${interviewId}` },
+          create: {
+            id: newId("job"),
+            interviewId,
+            kind: "EVALUATE",
+            key: `EVALUATE:${interviewId}`,
+            payload: {},
+          },
+          update: {},
+        });
+        await tx.interviewEvent.create({
+          data: domainEvent(interviewId, "interview.ended", {
+            reason: state.endReason,
+          }),
+        });
+      });
+    });
+  }
+
+  async evaluateAndStore(
+    interviewId: string,
+  ): Promise<{ status: "completed" }> {
+    return withInterviewLock(interviewId, () =>
+      this.runEvaluation(interviewId),
+    );
+  }
+  private async runEvaluation(
+    interviewId: string,
+  ): Promise<{ status: "completed" }> {
+    if (
+      (await prisma.evaluation.findUnique({ where: { interviewId } }))
+        ?.status === "completed"
+    )
       return { status: "completed" };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      await this.storeFailure(interviewId, message);
-      return { status: "failed" };
-    }
-  }
-
-  private async storeFailure(interviewId: string, reason: string): Promise<void> {
-    const existing = await evaluationRepo.getForInterview(interviewId);
-    if (existing) return;
-    try {
-      await evaluationRepo.create({
-        interviewId,
-        score: 0,
-        dimensions: {
-          technicalKnowledge: 0,
-          problemSolving: 0,
-          communication: 0,
-          projectUnderstanding: 0,
-          depth: 0,
-        },
-        strengths: [],
-        weaknesses: [],
-        feedback: `Evaluation failed: ${reason}`,
-        status: "failed",
+    const interview = await prisma.interview.findUniqueOrThrow({
+      where: { id: interviewId },
+      include: { githubContext: true, interviewPlan: true, runtime: true },
+    });
+    if (interview.status !== "completing")
+      throw new Error("Interview is not ready for evaluation");
+    const state = stateSchema.parse(interview.runtime?.data);
+    const turns = await prisma.conversationTurn.findMany({
+      where: { interviewId },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      take: 100,
+    });
+    const candidateIds = new Set(
+      turns
+        .filter((t) => t.role === "user" && t.analysisStatus === "completed")
+        .map((t) => t.id),
+    );
+    const evidence = state.evidence
+      .filter((e) => candidateIds.has(e.sourceTurnId))
+      .slice(-80);
+    const context = interview.githubContext;
+    const result = evidence.length
+      ? await withTrace(interviewId, "evaluation", () =>
+          this.evaluator.evaluate({
+            projectContext: {
+              owner: interview.owner,
+              name: interview.name,
+              projectSummary: context?.projectSummary.slice(0, 2500) ?? "",
+              technologies: context?.technologies ?? [],
+              architecture: JSON.stringify(context?.architecture).slice(
+                0,
+                2500,
+              ),
+              importantFiles: [],
+              evidence: [],
+            },
+            plan: {
+              role: interview.interviewPlan?.role ?? "Software Engineer",
+              difficulty: state.difficulty,
+              topics: [],
+              objectives: state.objectives.map((o) => ({
+                id: o.id,
+                topic: o.topic,
+                description: o.description.slice(0, 200),
+                status: o.status,
+              })),
+            },
+            transcript: turns
+              .slice(-60)
+              .map((t) => ({
+                id: t.id,
+                role:
+                  t.role === "user"
+                    ? ("user" as const)
+                    : ("assistant" as const),
+                text: t.text.slice(0, 350),
+              })),
+            candidateEvidence: evidence.map((e) => ({
+              ...e,
+              evidence: e.evidence.slice(0, 220),
+            })),
+            claims: state.claims
+              .slice(-20)
+              .map((c) => ({ ...c, statement: c.statement.slice(0, 250) })),
+            skills: {},
+            questionHistory: state.questions.map((q) => ({
+              ...q,
+              text: q.text.slice(0, 200),
+            })),
+          }),
+        )
+      : emptyEvaluation();
+    await prisma.$transaction(async (tx) => {
+      const data = { ...result, dimensions: { ...result.dimensions } };
+      await tx.evaluation.upsert({
+        where: { interviewId },
+        create: { interviewId, ...data },
+        update: { ...data, status: "completed" },
       });
-    } catch {
-      // never throw from this path
-    }
+      await tx.interview.update({
+        where: { id: interviewId },
+        data: { status: "completed", error: null, evaluationLeaseUntil: null },
+      });
+      state.phase = "COMPLETED";
+      await tx.interviewRuntime.update({
+        where: { interviewId },
+        data: {
+          data: state as unknown as Prisma.InputJsonValue,
+          version: { increment: 1 },
+        },
+      });
+      await tx.interviewEvent.create({
+        data: domainEvent(interviewId, "evaluation.completed", {
+          score: result.score,
+          evidenceCount: evidence.length,
+        }),
+      });
+    });
+    return { status: "completed" };
   }
 
-  async completeInterview(interviewId: string): Promise<void> {
-    await interviewRepo.updateStatus(interviewId, { status: "completed" });
-    const sessions = await sessionRepo.getActiveForInterview(interviewId);
-    if (sessions) {
-      await sessionRepo.registerCompleted(sessions.id).catch(() => {});
-    }
+  async retry(interviewId: string): Promise<void> {
+    await prisma.$transaction(async (tx) => {
+      const changed = await tx.interview.updateMany({
+        where: { id: interviewId, status: "evaluation_failed" },
+        data: { status: "completing", error: null },
+      });
+      if (!changed.count) return;
+      await tx.interviewJob.updateMany({
+        where: {
+          interviewId,
+          kind: { in: ["END", "EVALUATE"] },
+          status: "failed",
+        },
+        data: {
+          status: "pending",
+          attempts: 0,
+          runAt: new Date(),
+          error: null,
+        },
+      });
+    });
+  }
+
+  async finalizeExpired(reconnectSeconds = 300): Promise<void> {
+    const now = new Date();
+    const expired = await prisma.interview.findMany({
+      where: {
+        status: "active",
+        OR: [
+          { runtime: { deadlineAt: { lte: now } } },
+          {
+            sessions: {
+              some: {
+                disconnectedAt: {
+                  lte: new Date(now.getTime() - reconnectSeconds * 1000),
+                },
+              },
+            },
+          },
+        ],
+      },
+      select: { id: true },
+      take: 50,
+    });
+    for (const row of expired)
+      await enqueue(row.id, "END", undefined, {
+        reason: "time_or_reconnect_limit",
+      });
   }
 }

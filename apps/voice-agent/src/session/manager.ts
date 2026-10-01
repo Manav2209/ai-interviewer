@@ -1,11 +1,20 @@
-import { voice } from "@livekit/agents";
-import type { llm as llmModule, stt as sttModule, tts as ttsModule } from "@livekit/agents";
+import { voice, type VAD } from "@livekit/agents";
+import type {
+  llm as llmModule,
+  stt as sttModule,
+  tts as ttsModule,
+} from "@livekit/agents";
 import { getLogger } from "../logger.js";
 
 export type DomainEvent =
   | { type: "session.started"; sessionId: string }
   | { type: "session.close"; sessionId: string; reason: string }
-  | { type: "user_input_transcribed"; transcript: string; isFinal: boolean; sessionId: string }
+  | {
+      type: "user_input_transcribed";
+      transcript: string;
+      isFinal: boolean;
+      sessionId: string;
+    }
   | { type: "agent_state_changed"; state: string; sessionId: string }
   | {
       type: "conversation_item_added";
@@ -15,14 +24,35 @@ export type DomainEvent =
       sessionId: string;
     }
   | { type: "response.delta"; text: string; sessionId: string }
-  | { type: "response.completed"; fullText: string; status: string; sessionId: string }
-  | { type: "error"; error: string; detail?: string; source?: string; sessionId: string };
-  
+  | {
+      type: "response.completed";
+      fullText: string;
+      status: string;
+      sessionId: string;
+    }
+  | { type: "speech.interrupted"; sessionId: string }
+  | {
+      type: "voice.metrics";
+      source: string;
+      durationMs: number;
+      firstAudioMs?: number;
+      sessionId: string;
+    }
+  | {
+      type: "error";
+      error: string;
+      detail?: string;
+      source?: string;
+      recoverable?: boolean;
+      sessionId: string;
+    };
+
 export interface SessionManagerOptions {
   agent: voice.Agent;
   stt: sttModule.STT;
   llm: llmModule.LLM;
   tts: ttsModule.TTS;
+  vad: VAD;
   onEvent?: (ev: DomainEvent) => void;
 }
 
@@ -33,7 +63,13 @@ export class SessionManager {
   private readonly onEvent: (ev: DomainEvent) => void;
   private fullText = "";
 
-  constructor({ stt, llm, tts, onEvent }: Omit<SessionManagerOptions, "agent">) {
+  constructor({
+    stt,
+    llm,
+    tts,
+    vad,
+    onEvent,
+  }: Omit<SessionManagerOptions, "agent">) {
     this.sessionId = crypto.randomUUID();
     this.onEvent = onEvent ?? ((): void => {});
 
@@ -41,13 +77,22 @@ export class SessionManager {
       stt,
       llm,
       tts,
+      vad,
       turnHandling: {
         preemptiveGeneration: { enabled: false },
+        turnDetection: "stt",
+        endpointing: { minDelay: 100, maxDelay: 2000 },
+        interruption: {
+          mode: "vad",
+          enabled: true,
+          minDuration: 400,
+          minWords: 2,
+          resumeFalseInterruption: true,
+        },
       },
     });
 
-    const emit = (ev: DomainEvent): void =>
-      this.onEvent(ev);
+    const emit = (ev: DomainEvent): void => this.onEvent(ev);
 
     this.session.on(voice.AgentSessionEventTypes.UserInputTranscribed, (ev) => {
       emit({
@@ -62,39 +107,106 @@ export class SessionManager {
       if (ev.newState === "thinking") {
         this.fullText = "";
       }
-      emit({ type: "agent_state_changed", state: ev.newState, sessionId: this.sessionId });
+      emit({
+        type: "agent_state_changed",
+        state: ev.newState,
+        sessionId: this.sessionId,
+      });
     });
 
-    this.session.on(voice.AgentSessionEventTypes.ConversationItemAdded, (ev) => {
-      const interrupted =
-        "interrupted" in ev.item ? Boolean((ev.item as { interrupted?: boolean }).interrupted) : false;
-      const item = ev.item;
-      if ("role" in item && "content" in item) {
-        const text = typeof item.content === "string" ? item.content : null;
-        const role = String(item.role);
-        if (role === "assistant" && interrupted) {
-          emit({ type: "response.completed", fullText: this.fullText, status: "incomplete", sessionId: this.sessionId });
+    this.session.on(
+      voice.AgentSessionEventTypes.ConversationItemAdded,
+      (ev) => {
+        const interrupted =
+          "interrupted" in ev.item
+            ? Boolean((ev.item as { interrupted?: boolean }).interrupted)
+            : false;
+        const item = ev.item;
+        if (item.type === "message") {
+          const text = item.textContent ?? null;
+          const role = String(item.role);
+          if (role === "assistant" && interrupted) {
+            emit({
+              type: "response.completed",
+              fullText: text ?? "",
+              status: "incomplete",
+              sessionId: this.sessionId,
+            });
+          }
+          if (role === "assistant" && !interrupted && text) {
+            emit({
+              type: "response.completed",
+              fullText: text,
+              status: "completed",
+              sessionId: this.sessionId,
+            });
+          }
+          emit({
+            type: "conversation_item_added",
+            role,
+            text,
+            interrupted,
+            sessionId: this.sessionId,
+          });
         }
-        if (role === "assistant" && !interrupted && this.fullText.length > 0) {
-          emit({ type: "response.completed", fullText: this.fullText, status: "completed", sessionId: this.sessionId });
-        }
-        emit({ type: "conversation_item_added", role, text, interrupted, sessionId: this.sessionId });
-      }
+      },
+    );
+    this.session.on(voice.AgentSessionEventTypes.UserStateChanged, (ev) => {
+      if (ev.newState === "speaking" && this.session.agentState === "speaking")
+        emit({ type: "speech.interrupted", sessionId: this.sessionId });
     });
 
     this.session.on(voice.AgentSessionEventTypes.Error, (ev) => {
-      const source = ev.source && "label" in ev.source ? String(ev.source.label) : "unknown";
+      const source =
+        ev.error && typeof ev.error === "object" && "type" in ev.error
+          ? String(ev.error.type)
+          : "unknown";
       emit({
         type: "error",
         error: describeError(ev),
         detail: describeDetail(ev),
         source,
+        recoverable:
+          ev.error && typeof ev.error === "object" && "recoverable" in ev.error
+            ? Boolean(ev.error.recoverable)
+            : undefined,
         sessionId: this.sessionId,
       });
     });
+    this.session.on(
+      voice.AgentSessionEventTypes.MetricsCollected,
+      ({ metrics }) => {
+        if (metrics.type === "tts_metrics")
+          emit({
+            type: "voice.metrics",
+            source: "tts",
+            durationMs: metrics.durationMs,
+            firstAudioMs: metrics.ttfbMs,
+            sessionId: this.sessionId,
+          });
+        if (metrics.type === "stt_metrics")
+          emit({
+            type: "voice.metrics",
+            source: "stt",
+            durationMs: metrics.durationMs,
+            sessionId: this.sessionId,
+          });
+        if (metrics.type === "eou_metrics")
+          emit({
+            type: "voice.metrics",
+            source: "end_of_utterance",
+            durationMs: metrics.endOfUtteranceDelayMs,
+            sessionId: this.sessionId,
+          });
+      },
+    );
 
     this.session.on(voice.AgentSessionEventTypes.Close, (ev) => {
-      emit({ type: "session.close", reason: String(ev.reason), sessionId: this.sessionId });
+      emit({
+        type: "session.close",
+        reason: String(ev.reason),
+        sessionId: this.sessionId,
+      });
     });
   }
 
@@ -132,13 +244,16 @@ export class SessionManager {
     }
     const logger = getLogger();
     logger.info({ sessionId: this.sessionId }, "starting agent session");
-    await this.session.start({ agent, room: room as Parameters<voice.AgentSession["start"]>[0]["room"] });
+    await this.session.start({
+      agent,
+      room: room as Parameters<voice.AgentSession["start"]>[0]["room"],
+    });
     this.onEvent({ type: "session.started", sessionId: this.sessionId });
     return this;
   }
 
-  async say(text: string): Promise<void> {
-    await this.session.say(text);
+  async say(text: string, addToChatCtx = true): Promise<void> {
+    await this.session.say(text, { addToChatCtx }).waitForPlayout();
   }
 
   async close(): Promise<void> {
@@ -146,7 +261,9 @@ export class SessionManager {
   }
 }
 
-export function createSessionManager(options: Omit<SessionManagerOptions, "agent">): SessionManager {
+export function createSessionManager(
+  options: Omit<SessionManagerOptions, "agent">,
+): SessionManager {
   return new SessionManager(options);
 }
 

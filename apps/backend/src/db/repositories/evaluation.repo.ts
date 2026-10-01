@@ -1,21 +1,20 @@
 import type { Evaluation } from "@prisma/client";
 import { prisma } from "../client.js";
 
-export type EvaluationDimensions = {
-  technicalKnowledge: number;
-  problemSolving: number;
-  communication: number;
-  projectUnderstanding: number;
-  depth: number;
-};
+export type EvaluationDimensions =
+  import("../../evaluation/evaluation.types.js").EvaluationDimensions;
 
 export interface CreateEvaluationInput {
   interviewId: string;
-  score: number;
+  score: number | null;
   dimensions: EvaluationDimensions;
   strengths: string[];
   weaknesses: string[];
   feedback: string;
+  evidence?: Record<
+    string,
+    { level: string; evidenceIds: string[]; explanation: string }
+  >;
   status?: string;
 }
 
@@ -25,10 +24,11 @@ export class EvaluationRepo {
       data: {
         interviewId: input.interviewId,
         score: input.score,
-        dimensions: input.dimensions,
+        dimensions: { ...input.dimensions },
         strengths: input.strengths,
         weaknesses: input.weaknesses,
         feedback: input.feedback,
+        evidence: input.evidence,
         status: input.status ?? "completed",
       },
     });

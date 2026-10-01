@@ -1,182 +1,224 @@
-import type { ScrapedGithubRepo, GithubFile, GithubDependencyManifest } from "./github.types.js";
+import { z } from "zod";
+import type { ScrapedGithubRepo } from "./github.types.js";
 
-const GITHUB_API = "https://api.github.com";
+const API = "https://api.github.com";
+const manifestPattern =
+  /(?:^|\/)(?:package\.json|requirements[^/]*\.txt|pyproject\.toml|go\.mod|Cargo\.toml|Dockerfile[^/]*|docker-compose[^/]*\.ya?ml|composer\.json|Gemfile|pom\.xml|build\.gradle(?:\.kts)?)$/i;
+export function safeRepositoryPath(path: string): boolean {
+  return (
+    path.length <= 500 &&
+    !path.includes("\\") &&
+    !path.split("/").some((p) => p === ".." || p === "." || !p) &&
+    !/(?:^|\/)(?:\.git|node_modules|vendor|dist|build|\.next|\.env[^/]*|credentials[^/]*|secrets?[^/]*)(?:\/|$)/i.test(
+      path,
+    ) &&
+    !/\.(?:pem|key|p12|pfx|sqlite|db|png|jpe?g|gif|webp|woff2?|mp[34]|zip|pdf|lock)$/i.test(
+      path,
+    )
+  );
+}
 
-const MANIFEST_PATTERNS: { regex: RegExp; path: string }[] = [
-  { regex: /^package\.json$/i, path: "package.json" },
-  { regex: /^requirements.*\.txt$/i, path: "requirements.txt" },
-  { regex: /^pyproject\.toml$/i, path: "pyproject.toml" },
-  { regex: /^go\.mod$/i, path: "go.mod" },
-  { regex: /^Cargo\.toml$/i, path: "Cargo.toml" },
-  { regex: /^Dockerfile(\.\w+)?$/i, path: "Dockerfile" },
-  { regex: /^docker-compose.*\.ya?ml$/i, path: "docker-compose.yml" },
-  { regex: /^composer\.json$/i, path: "composer.json" },
-  { regex: /^Gemfile$/i, path: "Gemfile" },
-  { regex: /^pom\.xml$/i, path: "pom.xml" },
-  { regex: /^build\.gradle(?:\.kts)?$/i, path: "build.gradle" },
-];
-
-const MAX_TREE_FILES = 400;
-const MAX_COMMITS = 20;
+async function boundedText(res: Response, limit: number): Promise<string> {
+  if (Number(res.headers.get("content-length") ?? 0) > limit)
+    throw new Error("Repository response exceeds size limit");
+  const reader = res.body?.getReader();
+  if (!reader) return "";
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  try {
+    for (;;) {
+      const next = await reader.read();
+      if (next.done) break;
+      bytes += next.value.byteLength;
+      if (bytes > limit)
+        throw new Error("Repository response exceeds size limit");
+      chunks.push(next.value);
+    }
+  } finally {
+    await reader.cancel();
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
 
 export class GithubScraperError extends Error {}
-
 export class GithubScraper {
   private readonly headers: Record<string, string>;
-
   constructor(headers: Record<string, string> = {}) {
     this.headers = {
       Accept: "application/vnd.github+json",
-      "User-Agent": "github-ai-interviewer-backend",
+      "User-Agent": "ai-interviewer",
+      ...(process.env.GITHUB_TOKEN
+        ? { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` }
+        : {}),
       ...headers,
     };
   }
 
-  static parseGithubUrl(rawUrl: string): { owner: string; name: string; url: string } {
+  static parseGithubUrl(raw: string): {
+    owner: string;
+    name: string;
+    url: string;
+  } {
     let url: URL;
     try {
-      url = new URL(rawUrl);
+      url = new URL(raw);
     } catch {
-      throw new GithubScraperError("Invalid URL. Provide a full GitHub repository URL.");
+      throw new GithubScraperError("Provide a valid GitHub repository URL");
     }
-    if (url.hostname !== "github.com") {
-      throw new GithubScraperError("URL must point to github.com.");
-    }
-    const parts = url.pathname.split("/").filter(Boolean);
-    if (parts.length < 2) {
-      throw new GithubScraperError("GitHub URL must include owner and repository, e.g. https://github.com/user/project");
-    }
+    const parts = url.pathname.replace(/\/$/, "").split("/").filter(Boolean);
+    if (
+      url.protocol !== "https:" ||
+      url.hostname !== "github.com" ||
+      url.port ||
+      url.username ||
+      url.password ||
+      parts.length !== 2 ||
+      url.search ||
+      url.hash
+    )
+      throw new GithubScraperError("Use https://github.com/owner/repository");
     const owner = parts[0]!;
     const name = parts[1]!.replace(/\.git$/, "");
+    if (
+      !/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(owner) ||
+      !/^[A-Za-z0-9_.-]{1,100}$/.test(name) ||
+      [".", ".."].includes(name)
+    )
+      throw new GithubScraperError("Invalid GitHub repository identifier");
     return { owner, name, url: `https://github.com/${owner}/${name}` };
   }
 
-  private async getJson<T>(path: string): Promise<T> {
-    const res = await fetch(`${GITHUB_API}${path}`, { headers: this.headers });
-    if (res.status === 404) {
-      throw new GithubScraperError(`GitHub resource not found: ${path}`);
-    }
-    if (res.status === 403) {
-      throw new GithubScraperError("GitHub API rate limit exceeded (60 requests/hour unauthenticated).");
-    }
-    if (!res.ok) {
-      throw new GithubScraperError(`GitHub API error ${res.status} for ${path}`);
-    }
-    return (await res.json()) as T;
+  private async json(path: string): Promise<unknown> {
+    const res = await fetch(`${API}${path}`, {
+      headers: this.headers,
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok)
+      throw new GithubScraperError(`GitHub request failed (${res.status})`);
+    return JSON.parse(await boundedText(res, 2_000_000));
   }
 
-  private async getText(path: string): Promise<string | undefined> {
-    const res = await fetch(`${GITHUB_API}${path}`, { headers: this.headers });
-    if (res.status === 404) return undefined;
-    if (!res.ok) {
-      throw new GithubScraperError(`GitHub API error ${res.status} for ${path}`);
-    }
-    return await res.text();
+  private async file(
+    owner: string,
+    name: string,
+    sha: string,
+    path: string,
+  ): Promise<string | undefined> {
+    if (!safeRepositoryPath(path)) return undefined;
+    const encoded = path.split("/").map(encodeURIComponent).join("/");
+    const res = await fetch(
+      `https://raw.githubusercontent.com/${owner}/${name}/${sha}/${encoded}`,
+      {
+        headers: { "User-Agent": "ai-interviewer" },
+        signal: AbortSignal.timeout(8000),
+      },
+    );
+    if (!res.ok) return undefined;
+    return boundedText(res, 24000).catch(() => undefined);
   }
 
   async scrape(owner: string, name: string): Promise<ScrapedGithubRepo> {
-    const repo = await this.getJson<any>(`/repos/${owner}/${name}`);
-    const languages = await this.getJson<Record<string, number>>(`/repos/${owner}/${name}/languages`);
-
-    const defaultBranch = repo.default_branch ?? "main";
-    const tree = await this.getTree(owner, name, defaultBranch);
-
-    const manifests = await this.collectManifests(owner, name, defaultBranch, tree);
-    const readme = await this.getText(`/repos/${owner}/${name}/readme`).then((text) =>
-      text?.replace(/^\{[\s\S]*?\}\s*/, "")?.trim(),
+    const info = z
+      .object({
+        default_branch: z.string(),
+        description: z.string().nullable(),
+        language: z.string().nullable(),
+        size: z.number(),
+      })
+      .parse(await this.json(`/repos/${owner}/${name}`));
+    if (info.size > 100_000)
+      throw new GithubScraperError("Repository exceeds the 100 MB limit");
+    const commit = z
+      .object({ sha: z.string().regex(/^[a-f0-9]{40}$/) })
+      .parse(
+        await this.json(
+          `/repos/${owner}/${name}/commits/${encodeURIComponent(info.default_branch)}`,
+        ),
+      );
+    const treeData = z
+      .object({
+        tree: z.array(
+          z.object({
+            path: z.string(),
+            type: z.string(),
+            size: z.number().optional(),
+          }),
+        ),
+      })
+      .parse(
+        await this.json(
+          `/repos/${owner}/${name}/git/trees/${commit.sha}?recursive=1`,
+        ),
+      );
+    const tree = treeData.tree
+      .filter((f) => f.type === "blob" && safeRepositoryPath(f.path))
+      .slice(0, 1500)
+      .map((f) => ({ path: f.path, size: f.size ?? 0 }));
+    const languages = z
+      .record(z.number())
+      .parse(await this.json(`/repos/${owner}/${name}/languages`));
+    const ranked = tree.filter(
+      (f) =>
+        f.size <= 24000 &&
+        (manifestPattern.test(f.path) ||
+          /\.(?:[cm]?[jt]sx?|py|go|rs|java|kt|rb|php|json|prisma|ya?ml|toml|md)$/i.test(
+            f.path,
+          )),
     );
-    const recentCommits = await this.getRecentCommits(owner, name);
-
+    const rank = (path: string) =>
+      manifestPattern.test(path)
+        ? 0
+        : /(?:^|\/)readme\.md$/i.test(path)
+          ? 1
+          : /(?:route|server|main|index|schema|consumer|queue|socket|auth|service|controller)/i.test(
+                path,
+              )
+            ? 2
+            : 3;
+    ranked.sort(
+      (a, b) => rank(a.path) - rank(b.path) || a.path.localeCompare(b.path),
+    );
+    const sources: { path: string; content: string }[] = [];
+    let remaining = 120_000;
+    const selected = ranked.slice(0, 24);
+    for (
+      let offset = 0;
+      offset < selected.length && remaining > 0;
+      offset += 4
+    ) {
+      const files = await Promise.all(
+        selected
+          .slice(offset, offset + 4)
+          .map(async (file) => ({
+            path: file.path,
+            content: await this.file(owner, name, commit.sha, file.path).catch(
+              () => undefined,
+            ),
+          })),
+      );
+      for (const file of files)
+        if (file.content && remaining > 0) {
+          const bounded = file.content.slice(0, Math.min(10000, remaining));
+          sources.push({ path: file.path, content: bounded });
+          remaining -= bounded.length;
+        }
+    }
     return {
       repository: {
         owner,
         name,
-        url: repo.html_url ?? `https://github.com/${owner}/${name}`,
-        description: repo.description ?? undefined,
-        defaultBranch,
-        primaryLanguage: repo.language ?? undefined,
-        stars: repo.stargazers_count ?? undefined,
-        forks: repo.forks_count ?? undefined,
-        cloneUrl: repo.clone_url ?? undefined,
+        url: `https://github.com/${owner}/${name}`,
+        description: info.description ?? undefined,
+        defaultBranch: info.default_branch,
+        primaryLanguage: info.language ?? undefined,
+        commitSha: commit.sha,
       },
       languages: Object.keys(languages),
       tree,
-      manifests,
-      readme,
-      recentCommits,
+      sources,
+      manifests: sources.filter((f) => manifestPattern.test(f.path)),
+      readme: sources.find((f) => /(?:^|\/)readme\.md$/i.test(f.path))?.content,
+      recentCommits: [],
     };
-  }
-
-  private async getTree(owner: string, name: string, branch: string): Promise<GithubFile[]> {
-    try {
-      const data = await this.getJson<any>(
-        `/repos/${owner}/${name}/git/trees/${branch}?recursive=1`,
-      );
-      const entries: { path?: string; type?: string; size?: number }[] = data.tree ?? [];
-      const files = entries
-        .filter((e) => e.type === "blob" && typeof e.path === "string")
-        .map((e) => ({ path: e.path!, size: e.size ?? 0 }))
-        .filter((f) => !f.path.startsWith(".git/"));
-      return files.slice(0, MAX_TREE_FILES);
-    } catch {
-      return [];
-    }
-  }
-
-  private async collectManifests(
-    owner: string,
-    name: string,
-    branch: string,
-    tree: GithubFile[],
-  ): Promise<GithubDependencyManifest[]> {
-    const matched = new Set<string>();
-    for (const file of tree) {
-      for (const pattern of MANIFEST_PATTERNS) {
-        if (pattern.regex.test(file.path) && !matched.has(pattern.path)) {
-          matched.add(pattern.path);
-        }
-      }
-      if (matched.size >= MANIFEST_PATTERNS.length) break;
-    }
-
-    const manifests: GithubDependencyManifest[] = [];
-    for (const path of matched) {
-      const content = await this.getFileContent(owner, name, branch, path);
-      if (content) manifests.push({ path, content });
-    }
-    return manifests;
-  }
-
-  private async getFileContent(
-    owner: string,
-    name: string,
-    branch: string,
-    path: string,
-  ): Promise<string | undefined> {
-    const res = await fetch(
-      `https://raw.githubusercontent.com/${owner}/${name}/${branch}/${path}`,
-      { headers: { "User-Agent": "github-ai-interviewer-backend" } },
-    );
-    if (res.status === 404) return undefined;
-    if (!res.ok) return undefined;
-    return await res.text();
-  }
-
-  private async getRecentCommits(
-    owner: string,
-    name: string,
-  ): Promise<ScrapedGithubRepo["recentCommits"]> {
-    try {
-      const data = await this.getJson<any[]>(
-        `/repos/${owner}/${name}/commits?per_page=${MAX_COMMITS}`,
-      );
-      return (data ?? []).map((c) => ({
-        message: c.commit?.message ?? "",
-        author: c.commit?.author?.name ?? "",
-        date: c.commit?.author?.date ?? "",
-      }));
-    } catch {
-      return [];
-    }
   }
 }

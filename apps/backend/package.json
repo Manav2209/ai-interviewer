@@ -9,6 +9,7 @@
     "build": "prisma generate && tsc --noEmit",
     "check-types": "tsc --noEmit",
     "lint": "eslint src --max-warnings 0",
+    "test": "bun test src",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:migrate:deploy": "prisma migrate deploy",

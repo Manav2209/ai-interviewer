@@ -1,0 +1,10 @@
+BEGIN;
+ALTER TABLE "BrowserAccessSession" DROP CONSTRAINT "BrowserAccessSession_userId_fkey";
+ALTER TABLE "RepositoryKnowledge" DROP CONSTRAINT "RepositoryKnowledge_interviewId_fkey";
+ALTER TABLE "InterviewEvent" DROP CONSTRAINT "InterviewEvent_interviewId_fkey";
+ALTER TABLE "InterviewJob" DROP CONSTRAINT "InterviewJob_interviewId_fkey";
+ALTER TABLE "BrowserAccessSession" ADD CONSTRAINT "BrowserAccessSession_userId_fkey" FOREIGN KEY ("userId") REFERENCES "BrowserUser"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "RepositoryKnowledge" ADD CONSTRAINT "RepositoryKnowledge_interviewId_fkey" FOREIGN KEY ("interviewId") REFERENCES "Interview"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "InterviewEvent" ADD CONSTRAINT "InterviewEvent_interviewId_fkey" FOREIGN KEY ("interviewId") REFERENCES "Interview"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "InterviewJob" ADD CONSTRAINT "InterviewJob_interviewId_fkey" FOREIGN KEY ("interviewId") REFERENCES "Interview"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+COMMIT;

@@ -16,24 +16,34 @@ export function createCompletionRouter(evaluations: EvaluationService): Hono {
     if (!interview) {
       return c.json({ error: "Interview not found" }, 404);
     }
-    if (interview.status !== "active") {
+    if (
+      interview.status !== "active" &&
+      interview.status !== "completing" &&
+      interview.status !== "completed"
+    ) {
       return c.json(
         { error: `Interview cannot be ended from status=${interview.status}` },
         409,
       );
     }
 
-    await interviewRepo.updateStatus(interviewId, { status: "completing" });
-
-    const evaluation = await evaluations.evaluateAndStore(interviewId);
-    await evaluations.completeInterview(interviewId);
+    const evaluation = await evaluations.finalize(interviewId);
 
     return c.json({
       interviewId,
-      status: "completed",
+      status:
+        evaluation.status === "pending"
+          ? "completing"
+          : evaluation.status === "failed"
+            ? "evaluation_failed"
+            : "completed",
       evaluationStatus: evaluation.status,
     });
   });
 
+  app.post("/:interviewId/evaluation/retry", async (c) => {
+    await evaluations.retry(c.req.param("interviewId"));
+    return c.json({ status: "completing" });
+  });
   return app;
 }

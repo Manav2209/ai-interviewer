@@ -1,9 +1,10 @@
-import { interviewRepo } from "../db/repositories/interview.repo.js";
-import { sessionRepo } from "../db/repositories/session.repo.js";
+import { prisma } from "../db/client.js";
 import { LiveKitService } from "./livekit.service.js";
-import { newSessionId } from "../lib/ids.js";
+import { newId, newSessionId } from "../lib/ids.js";
 import type { BackendConfig } from "../config.js";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
+import { initialState } from "../interview/schemas.js";
+import { Prisma } from "@prisma/client";
 
 export interface StartSessionResult {
   interviewId: string;
@@ -12,101 +13,160 @@ export interface StartSessionResult {
   serverUrl: string;
   token: string;
 }
-
 export class SessionService {
   private readonly livekit: LiveKitService;
-  private readonly agentName: string;
-
   constructor(
-    cfg: Pick<BackendConfig, "LIVEKIT_URL" | "LIVEKIT_API_KEY" | "LIVEKIT_API_SECRET">,
-    agentName = "ai-interviewer",
+    private readonly cfg: Pick<
+      BackendConfig,
+      "LIVEKIT_URL" | "LIVEKIT_API_KEY" | "LIVEKIT_API_SECRET"
+    > &
+      Partial<
+        Pick<
+          BackendConfig,
+          "RECONNECT_WINDOW_SECONDS" | "INTERVIEW_DURATION_MINUTES"
+        >
+      >,
+    private readonly agentName = "ai-interviewer",
   ) {
     this.livekit = new LiveKitService(cfg);
-    this.agentName = agentName;
   }
-
   async startForInterview(interviewId: string): Promise<StartSessionResult> {
-    const interview = await interviewRepo.getById(interviewId);
-    if (!interview) {
-      throw new SessionError("Interview not found", 404);
-    }
-    if (interview.status !== "ready") {
-      throw new SessionError(
-        `Interview is not ready for a session (status=${interview.status})`,
-        409,
-      );
-    }
-
-    // Reuse an existing session for the same interview. An in-flight session is
-    // rejoined as-is; a stale one is re-dispatched on the same session id so the
-    // realtime-event foreign key stays valid.
-    const existing = await sessionRepo.getLatestForInterview(interviewId);
-    if (existing) {
-      if (existing.status === "created" || existing.status === "active") {
-        const token = await this.livekit.issueCandidateToken(
-          existing.roomName,
-          `candidate-${interviewId}`,
-        );
-        return {
-          interviewId,
-          sessionId: existing.id,
-          roomName: existing.roomName,
-          serverUrl: existing.serverUrl,
-          token,
-        };
-      }
-
-      await this.livekit.cleanupRoom(existing.roomName);
-      const resumed = await this.livekit.createSession({
-        roomName: existing.roomName,
-        interviewId,
-        sessionId: existing.id,
-        identity: `candidate-${interviewId}`,
-        agentName: this.agentName,
+    const leaseToken = newId("dispatch");
+    const reserved = await prisma.$transaction(async (tx) => {
+      // Serialize allocation across backend processes; dispatch happens after the row exists.
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${interviewId}))::text`;
+      const interview = await tx.interview.findUnique({
+        where: { id: interviewId },
+        include: { runtime: true, interviewPlan: true },
       });
-      await sessionRepo.updateStatus(existing.id, "created");
-      await interviewRepo.updateStatus(interviewId, { status: "active" });
-      return {
-        interviewId,
-        sessionId: existing.id,
-        roomName: resumed.roomName,
-        serverUrl: resumed.serverUrl,
-        token: resumed.candidateToken,
+      if (!interview) throw new SessionError("Interview not found", 404);
+      if (!["ready", "active"].includes(interview.status))
+        throw new SessionError("Interview cannot be resumed", 409);
+      const now = new Date();
+      if (
+        interview.runtime &&
+        (interview.runtime.deadlineAt <= now ||
+          (interview.runtime.data as { ended?: boolean }).ended)
+      )
+        throw new SessionError("Interview time has ended", 409);
+      const existing = await tx.interviewSession.findFirst({
+        where: { interviewId },
+        orderBy: { createdAt: "desc" },
+      });
+      if (existing?.dispatchLeaseUntil && existing.dispatchLeaseUntil > now)
+        throw new SessionError("Voice session is starting. Please retry.", 503);
+      if (
+        existing?.disconnectedAt &&
+        now.getTime() - existing.disconnectedAt.getTime() >
+          (this.cfg.RECONNECT_WINDOW_SECONDS ?? 300) * 1000
+      )
+        throw new SessionError("Reconnect window has expired", 409);
+      if (
+        existing?.status === "active" &&
+        !existing.disconnectedAt &&
+        existing.heartbeatAt &&
+        now.getTime() - existing.heartbeatAt.getTime() < 60_000
+      )
+        return { session: existing, dispatch: false };
+      // A successful dispatch may take a few seconds to register its first heartbeat.
+      if (
+        existing?.status === "created" &&
+        !existing.disconnectedAt &&
+        now.getTime() - existing.createdAt.getTime() < 30_000 &&
+        !existing.dispatchLeaseToken
+      )
+        return { session: existing, dispatch: false };
+      const sessionId = existing?.id ?? newSessionId();
+      const data = {
+        status: "created" as const,
+        dispatchLeaseToken: leaseToken,
+        dispatchLeaseUntil: new Date(now.getTime() + 60_000),
+        serverUrl: this.livekit.serverUrl(),
       };
+      const session = existing
+        ? await tx.interviewSession.update({ where: { id: sessionId }, data })
+        : await tx.interviewSession.create({
+            data: {
+              id: sessionId,
+              interviewId,
+              roomName: `interview-${interviewId}-${sessionId}`,
+              ...data,
+            },
+          });
+      if (!interview.runtime)
+        await tx.interviewRuntime.create({
+          data: {
+            interviewId,
+            deadlineAt: new Date(
+              now.getTime() +
+                (this.cfg.INTERVIEW_DURATION_MINUTES ?? 30) * 60_000,
+            ),
+            data: initialState(
+              interview.interviewPlan?.objectives,
+              interview.interviewPlan?.difficulty ?? "mid",
+            ) as unknown as Prisma.InputJsonValue,
+          },
+        });
+      await tx.interview.update({
+        where: { id: interviewId },
+        data: { status: "active", startedAt: interview.startedAt ?? now },
+      });
+      return { session, dispatch: true };
+    });
+    const session = reserved.session;
+    let token: string;
+    try {
+      if (reserved.dispatch) {
+        if (session.startedAt || session.disconnectedAt)
+          await this.livekit.cleanupRoom(session.roomName);
+        const created = await this.livekit.createSession({
+          roomName: session.roomName,
+          interviewId,
+          sessionId: session.id,
+          identity: `candidate-${interviewId}`,
+          agentName: this.agentName,
+          ttlSeconds: 3600,
+        });
+        token = created.candidateToken;
+        await prisma.interviewSession.updateMany({
+          where: { id: session.id, dispatchLeaseToken: leaseToken },
+          data: {
+            dispatchLeaseToken: null,
+            dispatchLeaseUntil: null,
+            disconnectedAt: null,
+          },
+        });
+      } else
+        token = await this.livekit.issueCandidateToken(
+          session.roomName,
+          `candidate-${interviewId}`,
+          3600,
+        );
+    } catch (err) {
+      await prisma.interviewSession.updateMany({
+        where: { id: session.id, dispatchLeaseToken: leaseToken },
+        data: {
+          dispatchLeaseToken: null,
+          dispatchLeaseUntil: null,
+          disconnectedAt: new Date(),
+        },
+      });
+      throw err;
     }
-
-    const sessionId = newSessionId();
-    const roomName = `interview-${interviewId}-${sessionId}`;
-
-    const created = await this.livekit.createSession({
-      roomName,
-      interviewId,
-      sessionId,
-      identity: `candidate-${interviewId}`,
-      agentName: this.agentName,
-    });
-
-    await sessionRepo.create({
-      id: sessionId,
-      interviewId,
-      roomName: created.roomName,
-      serverUrl: created.serverUrl,
-    });
-
-    await interviewRepo.updateStatus(interviewId, { status: "active" });
-
     return {
       interviewId,
-      sessionId,
-      roomName: created.roomName,
-      serverUrl: created.serverUrl,
-      token: created.candidateToken,
+      sessionId: session.id,
+      roomName: session.roomName,
+      serverUrl: session.serverUrl,
+      token,
     };
   }
 }
-
 export class SessionError extends Error {
-  constructor(message: string, readonly status?: ContentfulStatusCode) {
+  constructor(
+    message: string,
+    readonly status?: ContentfulStatusCode,
+  ) {
     super(message);
     this.name = "SessionError";
   }

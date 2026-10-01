@@ -41,14 +41,32 @@ model Interview {
   createdAt     DateTime        @default(now())
   startedAt     DateTime?
   completedAt   DateTime?
+  evaluationLeaseUntil DateTime?
   githubContext GithubContext?
   interviewPlan InterviewPlan?
   sessions      InterviewSession[]
   turns         ConversationTurn[]
   events        RealtimeEvent[]
   evaluation    Evaluation?
+  runtime       InterviewRuntime?
+  userId        String?
+  user          BrowserUser? @relation(fields: [userId], references: [id])
+  knowledge     RepositoryKnowledge?
+  domainEvents  InterviewEvent[]
+  jobs          InterviewJob[]
 
   @@index([githubUrl])
+}
+
+model InterviewRuntime {
+  interviewId String    @id
+  interview   Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  version     Int       @default(0)
+  data        Json
+  deadlineAt  DateTime
+  updatedAt   DateTime  @updatedAt
+  leaseToken  String?
+  leaseUntil  DateTime?
 }
 
 model GithubContext {
@@ -73,6 +91,7 @@ model InterviewPlan {
   difficulty  String
   topics      Json
   questions   Json
+  objectives  Json?
 }
 
 model InterviewSession {
@@ -87,6 +106,10 @@ model InterviewSession {
   createdAt   DateTime      @default(now())
   turns       ConversationTurn[]
   events      RealtimeEvent[]
+  disconnectedAt DateTime?
+  heartbeatAt DateTime?
+  dispatchLeaseUntil DateTime?
+  dispatchLeaseToken String?
 
   @@index([interviewId])
 }
@@ -102,9 +125,70 @@ model ConversationTurn {
   text        String
   createdAt   DateTime @default(now())
   completedAt DateTime?
+  questionId  String?
+  analysisStatus String @default("pending")
+  analysisError String?
 
   @@index([interviewId])
   @@index([sessionId])
+}
+
+model BrowserUser {
+  id String @id
+  sessions BrowserAccessSession[]
+  interviews Interview[]
+}
+
+model BrowserAccessSession {
+  id String @id
+  userId String
+  user BrowserUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String @unique
+  expiresAt DateTime
+}
+
+model RepositoryKnowledge {
+  interviewId String @id
+  interview Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  commitSha String
+  files Json
+  symbols Json
+  facts Json
+}
+
+model InterviewEvent {
+  id String @id
+  interviewId String
+  interview Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  type String
+  payload Json
+  createdAt DateTime @default(now())
+  exportedAt DateTime?
+  @@index([interviewId, createdAt])
+  @@index([exportedAt])
+}
+
+model InterviewJob {
+  id String @id
+  interviewId String
+  interview Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  kind String
+  key String @unique
+  payload Json
+  status String @default("pending")
+  attempts Int @default(0)
+  runAt DateTime @default(now())
+  leaseToken String?
+  leaseUntil DateTime?
+  error String?
+  @@index([status, runAt])
+}
+
+model RateLimitBucket {
+  id String @id
+  count Int
+  resetAt DateTime
+  @@index([resetAt])
 }
 
 model RealtimeEvent {
@@ -126,11 +210,12 @@ model Evaluation {
   id          String   @id @default(cuid())
   interviewId String   @unique
   interview   Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
-  score       Int
+  score       Int?
   dimensions  Json
   strengths   String[]
   weaknesses  String[]
   feedback    String
+  evidence    Json?
   status      String   @default("completed")
   createdAt   DateTime @default(now())
 }

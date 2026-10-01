@@ -1,62 +1,113 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import type { BackendConfig } from "../config.js";
-import { internalAuthFromConfig } from "./auth.js";
-import { RealtimeEventService } from "../realtime/events.js";
+import { internalAuthFromConfig, rateLimit } from "./auth.js";
+import {
+  RealtimeEventService,
+  realtimeEventSchema,
+  requireSession,
+} from "../realtime/events.js";
 import { interviewRepo } from "../db/repositories/interview.repo.js";
+import type { InterviewOrchestrator } from "../interview/orchestrator.js";
+import type { EvaluationService } from "../evaluation/evaluation.service.js";
+import { InterviewBusyError } from "../interview/runtime-lock.js";
+import { prisma } from "../db/client.js";
 
-const realtimeEventSchema = z.object({
-  eventId: z.string().min(1),
-  interviewId: z.string().min(1),
-  sessionId: z.string().min(1),
-  type: z.string().min(1),
-  timestamp: z.string().min(1),
-  payload: z.unknown().optional(),
-});
-
-export function createInternalRouter(config: BackendConfig, events: RealtimeEventService): Hono {
+const id = z.string().min(1).max(100);
+export function createInternalRouter(
+  config: BackendConfig,
+  events: RealtimeEventService,
+  orchestrator: InterviewOrchestrator,
+  evaluations: EvaluationService,
+): Hono {
   const app = new Hono();
   app.use("*", internalAuthFromConfig(config));
-
-  app.get("/context/:interviewId", async (c) => {
-    const interview = await interviewRepo.getWithContext(c.req.param("interviewId"));
-    if (!interview) {
-      return c.json({ error: "Interview not found" }, 404);
+  app.onError((err, c) => {
+    if (err instanceof InterviewBusyError) {
+      c.header("Retry-After", "1");
+      return c.json({ error: "Interview is processing another event" }, 503);
     }
+    if (err instanceof z.ZodError)
+      return c.json({ error: "Invalid request" }, 400);
+    console.error("Internal interview operation failed", err);
+    return c.json({ error: "Interview operation failed" }, 500);
+  });
+  app.get("/context/:interviewId", async (c) => {
+    const sessionId = c.req.query("sessionId");
+    if (!sessionId) return c.json({ error: "Session required" }, 400);
+    await requireSession(c.req.param("interviewId"), sessionId);
+    const interview = await interviewRepo.getWithContext(
+      c.req.param("interviewId"),
+    );
+    if (!interview) return c.json({ error: "Interview not found" }, 404);
     return c.json({
       interviewId: interview.id,
-      sessionId: c.req.query("sessionId") ?? undefined,
-      systemPrompt: interview.systemPrompt,
-      githubContext: interview.githubContext,
-      interviewPlan: interview.interviewPlan,
-      interview: {
-        status: interview.status,
-        githubUrl: interview.githubUrl,
-      },
+      sessionId,
+      githubContext: interview.githubContext
+        ? {
+            repository: interview.githubContext.repository,
+            projectSummary: interview.githubContext.projectSummary,
+          }
+        : null,
+      interview: { status: interview.status },
     });
   });
-
   app.post("/realtime/events", async (c) => {
-    const body = await c.req.json().catch(() => null);
-    const parsed = realtimeEventSchema.safeParse(body);
-    if (!parsed.success) {
-      return c.json({ error: "Invalid event", details: parsed.error.flatten() }, 400);
-    }
-
-    const result = await events.process({
-      eventId: parsed.data.eventId,
-      interviewId: parsed.data.interviewId,
-      sessionId: parsed.data.sessionId,
-      type: parsed.data.type,
-      timestamp: parsed.data.timestamp,
-      payload: parsed.data.payload,
-    });
-
+    const parsed = realtimeEventSchema.safeParse(
+      await c.req.json().catch(() => null),
+    );
+    if (!parsed.success) return c.json({ error: "Invalid event" }, 400);
+    if (!(await rateLimit(`agent:${parsed.data.sessionId}`, 180, 60_000)))
+      return c.json({ error: "Too many events" }, 429);
+    return c.json({ ok: true, ...(await events.process(parsed.data)) });
+  });
+  app.post("/interviews/:interviewId/start", async (c) => {
+    const parsed = z
+      .object({ sessionId: id })
+      .safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return c.json({ error: "Session required" }, 400);
     return c.json(
-      { ok: true, outcome: result.outcome, turnCreated: "turnCreated" in result ? result.turnCreated : undefined },
-      200,
+      await orchestrator.start(
+        c.req.param("interviewId"),
+        parsed.data.sessionId,
+      ),
     );
   });
-
+  app.post("/interviews/:interviewId/turns", async (c) => {
+    const parsed = z
+      .object({
+        sessionId: id,
+        turnId: id,
+        questionId: id,
+        text: z.string().trim().min(1).max(10000),
+      })
+      .safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success)
+      return c.json({ error: "Invalid final candidate turn" }, 400);
+    if (!(await rateLimit(`turn:${parsed.data.sessionId}`, 30, 60_000)))
+      return c.json({ error: "Too many turns" }, 429);
+    const result = await orchestrator.processTurn({
+      interviewId: c.req.param("interviewId"),
+      ...parsed.data,
+    });
+    if (result.ended) await evaluations.finalize(c.req.param("interviewId"));
+    return c.json(result);
+  });
+  app.get("/interviews/:interviewId/status", async (c) => {
+    await requireSession(
+      c.req.param("interviewId"),
+      c.req.query("sessionId") ?? "",
+    );
+    const interview = await prisma.interview.findUniqueOrThrow({
+      where: { id: c.req.param("interviewId") },
+      include: { runtime: true },
+    });
+    return c.json({
+      ended:
+        interview.status !== "active" ||
+        Boolean((interview.runtime?.data as { ended?: boolean } | null)?.ended),
+      deadlineAt: interview.runtime?.deadlineAt.toISOString(),
+    });
+  });
   return app;
 }

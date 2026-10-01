@@ -1,51 +1,72 @@
 "use client";
-
 import { use, useEffect, useState } from "react";
-import { getResult } from "../../../../lib/api";
+import { getResult, retryEvaluation } from "../../../../lib/api";
 import type { InterviewResult } from "../../../../types/interview";
 import InterviewResultView from "../../../../components/InterviewResult";
 
-export default function ResultPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id: interviewId } = use(params);
+export default function ResultPage({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}) {
+  const { id } = use(params);
   const [result, setResult] = useState<InterviewResult | null>(null);
-  const [failed, setFailed] = useState(false);
-
+  const [error, setError] = useState<string | null>(null);
+  const [revision, setRevision] = useState(0);
   useEffect(() => {
     let cancelled = false;
-    let attempts = 0;
-
-    async function load(): Promise<void> {
+    let timer: ReturnType<typeof setTimeout>;
+    let failures = 0;
+    const load = async () => {
       try {
-        const r = await getResult(interviewId);
+        const data = await getResult(id);
         if (cancelled) return;
-        if (r.score === undefined && r.message) {
-          if (attempts++ < 10) {
-            setTimeout(load, 3000);
-          } else {
-            setFailed(true);
-          }
+        failures = 0;
+        if (data.status === "evaluation_failed" || data.status === "failed") {
+          setError("Evaluation could not be completed. You can retry it.");
           return;
         }
-        setResult(r);
+        if (data.status === "completed" && data.score !== undefined) {
+          setResult(data);
+          return;
+        }
       } catch {
-        if (!cancelled && attempts++ >= 10) setFailed(true);
+        if (cancelled) return;
+        if (++failures >= 5) {
+          setError("Unable to load the result. Please try again.");
+          return;
+        }
       }
-    }
-
+      if (!cancelled) timer = setTimeout(load, 3000);
+    };
     void load();
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
-  }, [interviewId]);
-
+  }, [id, revision]);
+  const retry = async () => {
+    try {
+      await retryEvaluation(id);
+      setError(null);
+      setRevision((n) => n + 1);
+    } catch {
+      setError("Unable to retry. Please try again.");
+    }
+  };
   return (
     <main className="result-page">
-      {failed ? (
-        <p className="error">Something went wrong with the interview. Please try again.</p>
+      {error ? (
+        <div>
+          <p className="error">{error}</p>
+          <button type="button" onClick={retry}>
+            Retry
+          </button>
+        </div>
       ) : result ? (
         <InterviewResultView result={result} />
       ) : (
-        <p>Loading result...</p>
+        <p>Preparing your evaluation...</p>
       )}
     </main>
   );
