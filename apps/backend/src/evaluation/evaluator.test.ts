@@ -175,3 +175,47 @@ test("zero is a valid score for an observed answer, not missing evidence", async
   expect(result.score).toBe(0);
   expect(result.dimensions.technicalKnowledge).toBe(0);
 });
+
+test("answer indices resolve to actual turn IDs and reject out-of-range citations", async () => {
+  const fake = {
+    async completeJson() {
+      const result = emptyEvaluation();
+      return {
+        ...result,
+        evidence: {
+          ...result.evidence,
+          architecture: {
+            level: "INTERMEDIATE",
+            score: 65,
+            confidence: 0.8,
+            explanation: "Describes service boundaries",
+            evidenceIds: [],
+            observations: [
+              {
+                answerIndex: 1,
+                quote: "The ingress routes requests to the backend",
+              },
+              { answerIndex: 99, quote: "Invented" },
+            ],
+          },
+        },
+      };
+    },
+  } as unknown as LlmClient;
+  const result = await new Evaluator(fake).evaluate({
+    ...context,
+    transcript: [
+      { id: "turn_1", role: "user", text: "Hello" },
+      {
+        id: "turn_2",
+        role: "user",
+        text: "The ingress routes requests to the backend.",
+      },
+    ],
+  });
+  expect(result.score).toBe(65);
+  expect(result.evidence.architecture!.evidenceIds).toEqual(["turn_2"]);
+  expect(result.evidence.architecture!.observations).toEqual([
+    { turnId: "turn_2", quote: "The ingress routes requests to the backend" },
+  ]);
+});

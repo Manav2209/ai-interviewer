@@ -64,4 +64,5 @@ export interface InterviewView {
   status: InterviewStatus;
   githubUrl?: string;
   error?: string;
+  preparationStage?: "analyzing" | "planning" | "ready";
 }

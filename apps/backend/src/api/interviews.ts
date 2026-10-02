@@ -43,6 +43,11 @@ export function createInterviewsRouter(service: InterviewService): Hono {
       githubUrl: interview.githubUrl,
       error: interview.error ?? undefined,
       createdAt: interview.createdAt,
+      preparationStage: interview.interviewPlan
+        ? "ready"
+        : interview.githubContext
+          ? "planning"
+          : "analyzing",
     });
   });
 

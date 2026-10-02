@@ -8,11 +8,23 @@ const BASE_URL = (
   process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8080"
 ).replace(/\/$/, "");
 let accessPromise: Promise<string> | null = null;
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
 async function accessToken(): Promise<string> {
   const saved = localStorage.getItem("interview-access");
   if (saved) return saved;
   if (!accessPromise)
-    accessPromise = fetch(`${BASE_URL}/api/v1/auth/session`, { method: "POST" })
+    accessPromise = fetch(`${BASE_URL}/api/v1/auth/session`, {
+      method: "POST",
+      signal: AbortSignal.timeout(15000),
+    })
       .then(async (res) => {
         if (!res.ok)
           throw new Error("Unable to create an interview access session");
@@ -29,6 +41,9 @@ async function accessToken(): Promise<string> {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE_URL}${path}`, {
     ...init,
+    signal: init?.signal
+      ? AbortSignal.any([init.signal, AbortSignal.timeout(15000)])
+      : AbortSignal.timeout(15000),
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${await accessToken()}`,
@@ -51,7 +66,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       typeof (body as { error: unknown }).error === "string"
         ? (body as { error: string }).error
         : null) ?? `Request failed (${res.status})`;
-    throw new Error(message);
+    throw new ApiError(message, res.status);
   }
 
   return body as T;
@@ -64,8 +79,13 @@ export function createInterview(githubUrl: string): Promise<InterviewView> {
   });
 }
 
-export function getInterview(interviewId: string): Promise<InterviewView> {
-  return request<InterviewView>(`/api/v1/interviews/${interviewId}`);
+export function getInterview(
+  interviewId: string,
+  signal?: AbortSignal,
+): Promise<InterviewView> {
+  return request<InterviewView>(`/api/v1/interviews/${interviewId}`, {
+    signal,
+  });
 }
 
 const inFlightSessions = new Map<string, Promise<SessionInfo>>();

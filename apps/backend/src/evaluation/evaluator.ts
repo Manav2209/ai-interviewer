@@ -18,7 +18,8 @@ const category = z.object({
   observations: z
     .array(
       z.object({
-        turnId: z.string(),
+        turnId: z.string().default(""),
+        answerIndex: z.number().int().nonnegative().optional(),
         quote: z.string().min(1).max(1500),
       }),
     )
@@ -88,6 +89,7 @@ export class Evaluator {
         .map((t) => [t.id, t]),
     );
     const extracted = new Map(ctx.candidateEvidence.map((e) => [e.id, e]));
+    const indexedAnswers = [...answers.values()];
     if (!answers.size && !extracted.size) return emptyEvaluation();
     const result = await structured(
       this.llm,
@@ -102,41 +104,50 @@ export class Evaluator {
             "Confidence means certainty of your assessment, NOT candidate ability. A clearly weak or incorrect answer deserves a low score with high confidence. " +
             "INSUFFICIENT_EVIDENCE is only for categories with no assessable answers, not for basic knowledge or weak reasoning. " +
             "BASIC: 0-49, INTERMEDIATE: 50-79, ADVANCED: 80-100. ADVANCED requires strong reasoning in at least two distinct answers. " +
-            "For each assessed category provide observations with exact quotes and the originating candidate turnId. " +
-            "Evidence IDs must be the recorded candidate turn IDs. Never cite assistant turns or repository facts. " +
-            "Unexplored objectives and pipeline failures are not weaknesses. Return JSON only.",
+            "For each assessed category provide observations with an answerIndex from candidateAnswers and an EXACT quote from that answer. " +
+            "The indices are zero-based; do not copy the same index into different quotes. You may cite multiple consecutive answer fragments together. " +
+            "Never cite assistant turns or repository facts. Include a numeric score for every assessed category. " +
+            "Only mark a category unassessed if the conversation contains no relevant assessable answer. " +
+            "Unexplored objectives and pipeline failures are not weaknesses. Feedback must follow the assessed categories. Return JSON only.",
         },
         {
           role: "user",
           content: JSON.stringify({
             projectContext: ctx.projectContext,
             plan: ctx.plan,
-            transcript: ctx.transcript,
+            candidateAnswers: indexedAnswers.map((answer, answerIndex) => ({
+              answerIndex,
+              question: ctx.questionHistory.find(
+                (q) => q.id === answer.questionId,
+              )?.text,
+              text: answer.text,
+            })),
             questionHistory: ctx.questionHistory,
             // Final grading deliberately bypasses speculative summaries from the live path.
             ...(!answers.size
               ? { candidateEvidence: ctx.candidateEvidence }
               : {}),
-            claims: ctx.claims,
-            outputExample: {
-              strengths: ["Specific strength supported by an answer"],
-              weaknesses: ["Specific gap demonstrated in an answer"],
+            outputFormat: {
+              strengths:
+                "Array of specific strengths supported by assessed categories",
+              weaknesses:
+                "Array of specific gaps demonstrated in assessed categories",
               feedback: "Actionable feedback based on the recorded answers",
               evidence: Object.fromEntries(
                 categories.map((c) => [
                   c,
                   {
-                    level: "BASIC",
-                    score: 35,
-                    confidence: 0.8,
-                    evidenceIds: [
-                      answers.keys().next().value ?? "candidate evidence id",
-                    ],
+                    level:
+                      "BASIC | INTERMEDIATE | ADVANCED | INSUFFICIENT_EVIDENCE",
+                    score: "Integer 0..100; null only when unassessed",
+                    confidence:
+                      "Number 0..1: certainty of the assessment, NOT skill level",
                     observations: [
                       {
-                        turnId:
-                          answers.keys().next().value ?? "candidate turn id",
-                        quote: "Exact words from that candidate answer",
+                        answerIndex:
+                          "Zero-based integer identifying the quoted candidateAnswers entry",
+                        quote:
+                          "Verbatim words from that answer, without paraphrasing or fixing transcription errors",
                       },
                     ],
                     explanation:
@@ -153,10 +164,20 @@ export class Evaluator {
 
     for (const item of Object.values(result.evidence)) {
       if (answers.size) {
-        item.observations = item.observations.filter((o) => {
-          const source = answers.get(o.turnId);
-          return source && normalize(source.text).includes(normalize(o.quote));
-        });
+        item.observations = item.observations
+          .map((o) => ({
+            turnId:
+              o.answerIndex !== undefined
+                ? (indexedAnswers[o.answerIndex]?.id ?? "")
+                : o.turnId,
+            quote: o.quote,
+          }))
+          .filter((o) => {
+            const source = answers.get(o.turnId);
+            return (
+              source && normalize(source.text).includes(normalize(o.quote))
+            );
+          });
         item.evidenceIds = [...new Set(item.observations.map((o) => o.turnId))];
       } else {
         item.evidenceIds = [...new Set(item.evidenceIds)].filter((id) =>
@@ -174,6 +195,7 @@ export class Evaluator {
       if (
         !item.evidenceIds.length ||
         item.confidence < 0.4 ||
+        (answers.size > 0 && item.score == null) ||
         item.level === "INSUFFICIENT_EVIDENCE"
       ) {
         item.level = "INSUFFICIENT_EVIDENCE";
