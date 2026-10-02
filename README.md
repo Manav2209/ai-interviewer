@@ -52,9 +52,9 @@ Repository text and candidate answers are untrusted data. All structured model o
 
 ## Evaluation
 
-The evaluation includes technical depth, architecture, debugging, implementation, tradeoff reasoning, and communication. Each category includes its level, confidence, and candidate evidence IDs. Citations are checked against recorded evidence. Unsupported categories and scores remain `INSUFFICIENT_EVIDENCE` / `null`; pipeline failures and unexplored objectives are not candidate weaknesses.
+The evaluation includes technical depth, architecture, debugging, implementation, tradeoff reasoning, and communication. Final grading reads the recorded candidate answers directly, including adjacent speech fragments, instead of trusting speculative live summaries. Every assessed category includes a numeric score, confidence, and quotes checked against the originating candidate turns. Confidence expresses certainty of the assessment, not candidate ability: a clearly weak answer can receive a low score with high confidence. Unsupported categories and scores remain `INSUFFICIENT_EVIDENCE` / `null`; pipeline failures and unexplored objectives are not candidate weaknesses. Overall and dimension scores are calculated from assessed categories, excluding unassessed areas.
 
-The existing score layout is retained, with an expandable category assessment.
+The responsive result view includes a skill breakdown, supporting answer quotes, session details, transcript review, and an option to regenerate an assessment of the saved answers.
 
 ## Access and security
 
@@ -81,7 +81,7 @@ bun run db:generate
 bun run db:migrate:deploy
 ```
 
-The backend defaults to a 30-minute interview and a 300-second reconnect window. Optional `GITHUB_TOKEN` authenticates public GitHub API requests. The voice pipeline uses Deepgram STT endpointing and Silero for interruption detection; its defaults require 400 ms of speech and two transcribed words for interruption, reducing accidental cancellation from brief noises.
+The backend defaults to a 30-minute interview and a 300-second reconnect window. Optional `GITHUB_TOKEN` authenticates public GitHub API requests. Silero controls answer boundaries with a 1-second silence window, while Deepgram final segments accumulate within an answer (500 ms provider endpointing). Silero also detects interruptions; its defaults require 400 ms of speech and two transcribed words for interruption, reducing accidental cancellation from brief noises.
 
 Start the backend and web app from the repository root:
 

@@ -37,10 +37,42 @@ export function createResultsRouter(): Hono {
     }
 
     const evaluation = await evaluationRepo.getForInterview(interviewId);
-    if (!evaluation) {
+    const turns = await prisma.conversationTurn.findMany({
+      where: { interviewId, role: "user" },
+      select: { questionId: true, analysisStatus: true },
+    });
+    const summary = {
+      repository: `${interview.owner}/${interview.name}`,
+      candidateTurns: turns.length,
+      answeredQuestions: new Set(turns.map((t) => t.questionId).filter(Boolean))
+        .size,
+      analyzedTurns: turns.filter((t) => t.analysisStatus === "completed")
+        .length,
+      failedAnalyses: turns.filter((t) => t.analysisStatus === "failed").length,
+      durationSeconds: interview.startedAt
+        ? Math.max(
+            0,
+            Math.round(
+              ((
+                interview.completedAt ??
+                evaluation?.createdAt ??
+                new Date()
+              ).getTime() -
+                interview.startedAt.getTime()) /
+                1000,
+            ),
+          )
+        : null,
+    };
+    if (
+      !evaluation ||
+      interview.status !== "completed" ||
+      evaluation.status !== "completed"
+    ) {
       return c.json({
         status: interview.status,
         message: "Evaluation not available yet",
+        summary,
       });
     }
 
@@ -55,6 +87,7 @@ export function createResultsRouter(): Hono {
       strengths: evaluation.strengths,
       weaknesses: evaluation.weaknesses,
       feedback: evaluation.feedback,
+      summary,
     });
   });
 

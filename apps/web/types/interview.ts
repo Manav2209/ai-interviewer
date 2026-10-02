@@ -44,9 +44,19 @@ export interface InterviewResult {
       confidence: number;
       evidenceIds: string[];
       explanation: string;
+      score?: number | null;
+      observations?: { turnId: string; quote: string }[];
     }
   >;
   message?: string;
+  summary?: {
+    repository: string;
+    candidateTurns: number;
+    answeredQuestions: number;
+    analyzedTurns: number;
+    failedAnalyses: number;
+    durationSeconds: number | null;
+  };
 }
 
 export interface InterviewView {

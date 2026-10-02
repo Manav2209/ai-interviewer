@@ -19,6 +19,8 @@ export interface Evaluation {
       confidence: number;
       evidenceIds: string[];
       explanation: string;
+      score?: number | null;
+      observations?: { turnId: string; quote: string }[];
     }
   >;
 }
@@ -44,7 +46,12 @@ export interface EvaluationContext {
       status?: string;
     }[];
   };
-  transcript: { id: string; role: "user" | "assistant"; text: string }[];
+  transcript: {
+    id: string;
+    role: "user" | "assistant";
+    text: string;
+    questionId?: string | null;
+  }[];
   candidateEvidence: import("../interview/interview.types.js").CandidateEvidence[];
   claims?: import("../interview/interview.types.js").CandidateClaim[];
   skills?: Record<string, import("../interview/interview.types.js").SkillState>;

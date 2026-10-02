@@ -34,7 +34,16 @@ test("invented evidence IDs cannot produce scores or unsupported strengths", asy
       return result;
     },
   } as unknown as LlmClient;
-  const result = await new Evaluator(fake).evaluate(context);
+  const result = await new Evaluator(fake).evaluate({
+    ...context,
+    transcript: [
+      {
+        id: "turn_real",
+        role: "user",
+        text: "I use a cache for repeated requests.",
+      },
+    ],
+  });
   expect(result.score).toBeNull();
   expect(result.strengths).toEqual([]);
   expect(result.weaknesses).toEqual([]);
@@ -76,4 +85,93 @@ test("a single strong example cannot support an advanced assessment", async () =
   });
   expect(result.evidence.technicalDepth!.level).toBe("INTERMEDIATE");
   expect(result.evidence.technicalDepth!.confidence).toBe(0.7);
+});
+
+test("final scoring uses quoted answers even when live evidence is missing or uncertain", async () => {
+  const fake = {
+    async completeJson() {
+      const result = emptyEvaluation();
+      result.evidence.architecture = {
+        level: "BASIC",
+        score: 42,
+        confidence: 0.85,
+        evidenceIds: ["turn_1"],
+        observations: [
+          {
+            turnId: "turn_1",
+            quote: "The orchestrator sends commands through Redis streams",
+          },
+        ],
+        explanation:
+          "Identifies message flow but does not explain failure handling.",
+      };
+      return result;
+    },
+  } as unknown as LlmClient;
+  const result = await new Evaluator(fake).evaluate({
+    ...context,
+    transcript: [
+      {
+        id: "turn_1",
+        role: "user",
+        text: "The orchestrator sends commands through Redis streams to the sandboxes.",
+      },
+    ],
+  });
+  expect(result.score).toBe(42);
+  expect(result.dimensions.projectUnderstanding).toBe(42);
+  expect(result.dimensions.problemSolving).toBeNull();
+  expect(result.evidence.architecture!.confidence).toBe(0.85);
+});
+
+test("fabricated quotes and assistant text cannot support a score", async () => {
+  const fake = {
+    async completeJson() {
+      const result = emptyEvaluation();
+      result.evidence.debugging = {
+        level: "ADVANCED",
+        score: 95,
+        confidence: 1,
+        evidenceIds: ["turn_1", "turn_ai"],
+        observations: [
+          { turnId: "turn_1", quote: "I diagnosed a distributed deadlock" },
+          { turnId: "turn_ai", quote: "Check the deadlock logs" },
+        ],
+        explanation: "Invented expertise",
+      };
+      return result;
+    },
+  } as unknown as LlmClient;
+  const result = await new Evaluator(fake).evaluate({
+    ...context,
+    transcript: [
+      { id: "turn_1", role: "user", text: "I do not know how to debug that." },
+      { id: "turn_ai", role: "assistant", text: "Check the deadlock logs" },
+    ],
+  });
+  expect(result.score).toBeNull();
+  expect(result.evidence.debugging!.evidenceIds).toEqual([]);
+});
+
+test("zero is a valid score for an observed answer, not missing evidence", async () => {
+  const fake = {
+    async completeJson() {
+      const result = emptyEvaluation();
+      result.evidence.technicalDepth = {
+        level: "BASIC",
+        score: 0,
+        confidence: 0.9,
+        evidenceIds: ["turn_1"],
+        observations: [{ turnId: "turn_1", quote: "SQL has no tables" }],
+        explanation: "An explicitly incorrect explanation of SQL.",
+      };
+      return result;
+    },
+  } as unknown as LlmClient;
+  const result = await new Evaluator(fake).evaluate({
+    ...context,
+    transcript: [{ id: "turn_1", role: "user", text: "SQL has no tables" }],
+  });
+  expect(result.score).toBe(0);
+  expect(result.dimensions.technicalKnowledge).toBe(0);
 });

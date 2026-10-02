@@ -106,11 +106,10 @@ export class EvaluationService {
   private async runEvaluation(
     interviewId: string,
   ): Promise<{ status: "completed" }> {
-    if (
-      (await prisma.evaluation.findUnique({ where: { interviewId } }))
-        ?.status === "completed"
-    )
-      return { status: "completed" };
+    const previous = await prisma.evaluation.findUnique({
+      where: { interviewId },
+    });
+    if (previous?.status === "completed") return { status: "completed" };
     const interview = await prisma.interview.findUniqueOrThrow({
       where: { id: interviewId },
       include: { githubContext: true, interviewPlan: true, runtime: true },
@@ -132,7 +131,7 @@ export class EvaluationService {
       .filter((e) => candidateIds.has(e.sourceTurnId))
       .slice(-80);
     const context = interview.githubContext;
-    const result = evidence.length
+    const result = turns.some((t) => t.role === "user" && t.text.trim())
       ? await withTrace(interviewId, "evaluation", () =>
           this.evaluator.evaluate({
             projectContext: {
@@ -159,15 +158,21 @@ export class EvaluationService {
               })),
             },
             transcript: turns
-              .slice(-60)
               .map((t) => ({
                 id: t.id,
                 role:
                   t.role === "user"
                     ? ("user" as const)
                     : ("assistant" as const),
-                text: t.text.slice(0, 350),
-              })),
+                text: t.text.slice(0, t.role === "user" ? 2000 : 500),
+                questionId: t.questionId,
+              }))
+              .filter(
+                ((budget) => (turn) => {
+                  budget -= turn.text.length;
+                  return budget >= 0;
+                })(36000),
+              ),
             candidateEvidence: evidence.map((e) => ({
               ...e,
               evidence: e.evidence.slice(0, 220),
@@ -192,7 +197,13 @@ export class EvaluationService {
       });
       await tx.interview.update({
         where: { id: interviewId },
-        data: { status: "completed", error: null, evaluationLeaseUntil: null },
+        data: {
+          status: "completed",
+          error: null,
+          evaluationLeaseUntil: null,
+          completedAt:
+            interview.completedAt ?? previous?.createdAt ?? new Date(),
+        },
       });
       state.phase = "COMPLETED";
       await tx.interviewRuntime.update({
@@ -215,15 +226,36 @@ export class EvaluationService {
   async retry(interviewId: string): Promise<void> {
     await prisma.$transaction(async (tx) => {
       const changed = await tx.interview.updateMany({
-        where: { id: interviewId, status: "evaluation_failed" },
+        where: {
+          id: interviewId,
+          status: { in: ["evaluation_failed", "completed"] },
+        },
         data: { status: "completing", error: null },
       });
       if (!changed.count) return;
+      await tx.evaluation.updateMany({
+        where: { interviewId },
+        data: { status: "pending" },
+      });
+      const runtime = await tx.interviewRuntime.findUnique({
+        where: { interviewId },
+      });
+      if (runtime) {
+        const state = stateSchema.parse(runtime.data);
+        state.phase = "FINAL";
+        await tx.interviewRuntime.update({
+          where: { interviewId },
+          data: {
+            data: state as unknown as Prisma.InputJsonValue,
+            version: { increment: 1 },
+          },
+        });
+      }
       await tx.interviewJob.updateMany({
         where: {
           interviewId,
           kind: { in: ["END", "EVALUATE"] },
-          status: "failed",
+          status: { in: ["failed", "completed"] },
         },
         data: {
           status: "pending",

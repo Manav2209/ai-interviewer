@@ -80,8 +80,9 @@ export class SessionManager {
       vad,
       turnHandling: {
         preemptiveGeneration: { enabled: false },
-        turnDetection: "stt",
-        endpointing: { minDelay: 100, maxDelay: 2000 },
+        // Silero owns answer boundaries; STT final segments are not complete answers.
+        turnDetection: "vad",
+        endpointing: { minDelay: 1000, maxDelay: 3000 },
         interruption: {
           mode: "vad",
           enabled: true,

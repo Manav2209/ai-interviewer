@@ -16,6 +16,8 @@ export function buildProviders(cfg: VoiceProviderConfig): ProviderSet {
     apiKey: cfg.deepgramApiKey,
     model: cfg.deepgramModel,
     language: cfg.language,
+    // Deepgram's 25 ms default ends speech at ordinary pauses within an answer.
+    endpointing: 500,
     utteranceEndMs: cfg.deepgramUtteranceEndMs,
   });
 

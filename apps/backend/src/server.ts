@@ -29,6 +29,7 @@ const orchestrator = new InterviewOrchestrator(
   llm,
   config.INTERVIEW_DURATION_MINUTES,
 );
+
 const worker = new JobWorker({
   PREPARE: (id) => interviewService.runPipeline(id),
   END: (id, payload) =>
