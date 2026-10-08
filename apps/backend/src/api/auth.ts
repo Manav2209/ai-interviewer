@@ -2,7 +2,7 @@ import type { Context, Next } from "hono";
 import type { BackendConfig } from "../config.js";
 import { Hono } from "hono";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { prisma } from "../db/client.js";
+import { prisma } from "@repo/db";
 import { newId } from "../lib/ids.js";
 
 declare module "hono" {

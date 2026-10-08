@@ -1,6 +1,5 @@
 import { z } from "zod";
-import type { Prisma } from "@prisma/client";
-import { prisma } from "../db/client.js";
+import { type Prisma, prisma } from "@repo/db";
 import { safeRepositoryPath } from "./github.scraper.js";
 import type {
   IndexedFile,

@@ -16,7 +16,7 @@ import { InterviewOrchestrator } from "./interview/orchestrator.js";
 import { browserAuthRouter, browserOwnership } from "./api/auth.js";
 import { JobWorker } from "./jobs/queue.js";
 import { exportTraces } from "./observability/events.js";
-import { prisma } from "./db/client.js";
+import { prisma } from "@repo/db";
 
 const config = loadConfig();
 

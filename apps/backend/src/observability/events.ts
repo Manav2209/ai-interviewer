@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { Prisma } from "@prisma/client";
-import { prisma } from "../db/client.js";
+import { Prisma, prisma } from "@repo/db";
 import { newId } from "../lib/ids.js";
 export const interviewTrace = new AsyncLocalStorage<{
   interviewId: string;

@@ -1,5 +1,4 @@
-import { Prisma } from "@prisma/client";
-import { prisma } from "../db/client.js";
+import { Prisma, prisma } from "@repo/db";
 import { RepositoryKnowledge } from "../github/knowledge.js";
 import { newId } from "../lib/ids.js";
 import type { LlmClient } from "../llm/llm.client.js";
@@ -124,11 +123,14 @@ export class InterviewOrchestrator {
   async start(interviewId: string, sessionId?: string): Promise<NextResponse> {
     const interview = await prisma.interview.findUnique({
       where: { id: interviewId },
-      include: { interviewPlan: true, githubContext: true },
+      include: {
+        interviewPlan: true,
+        knowledge: { select: { interviewId: true } },
+      },
     });
     if (
       !interview?.interviewPlan ||
-      !interview.githubContext ||
+      !interview.knowledge ||
       interview.status !== "active"
     )
       throw new Error("Interview is not active or prepared");

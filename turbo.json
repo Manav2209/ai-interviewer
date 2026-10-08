@@ -11,6 +11,12 @@
     "RECONNECT_WINDOW_SECONDS"
   ],
   "tasks": {
+    "@repo/db#build": {
+      "outputs": ["generated/**"]
+    },
+    "@repo/db#check-types": {
+      "dependsOn": ["build"]
+    },
     "build": {
       "dependsOn": ["^build"],
       "inputs": ["$TURBO_DEFAULT$", ".env*"],
@@ -80,6 +86,7 @@
       "envMode": "loose"
     },
     "dev": {
+      "dependsOn": ["^build"],
       "cache": false,
       "persistent": true,
       "env": ["NEXT_PUBLIC_BACKEND_URL"]

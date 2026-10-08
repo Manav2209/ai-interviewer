@@ -1,6 +1,9 @@
-import type { InterviewSession, SessionStatus } from "@prisma/client";
-import type { Interview } from "@prisma/client";
-import { prisma } from "../client.js";
+import {
+  type InterviewSession,
+  type SessionStatus,
+  type Interview,
+  prisma,
+} from "@repo/db";
 
 export interface CreateSessionInput {
   id: string;
@@ -20,27 +23,40 @@ export class SessionRepo {
     return prisma.interviewSession.findUnique({ where: { id } });
   }
 
-  async getActiveForInterview(interviewId: string): Promise<InterviewSession | null> {
+  async getActiveForInterview(
+    interviewId: string,
+  ): Promise<InterviewSession | null> {
     return prisma.interviewSession.findFirst({
-      where: { interviewId, status: { in: ["created", "active"] as SessionStatus[] } },
+      where: {
+        interviewId,
+        status: { in: ["created", "active"] as SessionStatus[] },
+      },
       orderBy: { createdAt: "desc" },
     });
   }
 
-  async getLatestForInterview(interviewId: string): Promise<InterviewSession | null> {
+  async getLatestForInterview(
+    interviewId: string,
+  ): Promise<InterviewSession | null> {
     return prisma.interviewSession.findFirst({
       where: { interviewId },
       orderBy: { createdAt: "desc" },
     });
   }
 
-  async updateStatus(id: string, status: SessionStatus): Promise<InterviewSession> {
+  async updateStatus(
+    id: string,
+    status: SessionStatus,
+  ): Promise<InterviewSession> {
     return prisma.interviewSession.update({
       where: { id },
       data: {
         status,
         startedAt: status === "active" ? new Date() : undefined,
-        endedAt: status === "completed" || status === "failed" ? new Date() : undefined,
+        endedAt:
+          status === "completed" || status === "failed"
+            ? new Date()
+            : undefined,
       },
     });
   }

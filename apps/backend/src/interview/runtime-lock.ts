@@ -1,4 +1,4 @@
-import { prisma } from "../db/client.js";
+import { prisma } from "@repo/db";
 import { newId } from "../lib/ids.js";
 
 export class InterviewBusyError extends Error {}

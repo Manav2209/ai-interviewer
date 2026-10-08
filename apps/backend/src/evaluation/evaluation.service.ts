@@ -1,5 +1,4 @@
-import { Prisma } from "@prisma/client";
-import { prisma } from "../db/client.js";
+import { Prisma, prisma } from "@repo/db";
 import { Evaluator, emptyEvaluation } from "./evaluator.js";
 import type { LlmClient } from "../llm/llm.client.js";
 import { stateSchema } from "../interview/schemas.js";
@@ -7,6 +6,7 @@ import { withInterviewLock } from "../interview/runtime-lock.js";
 import { domainEvent, withTrace } from "../observability/events.js";
 import { enqueue } from "../jobs/queue.js";
 import { newId } from "../lib/ids.js";
+import { readGithubContext } from "../github/context.js";
 
 export class EvaluationService {
   private readonly evaluator: Evaluator;
@@ -112,7 +112,11 @@ export class EvaluationService {
     if (previous?.status === "completed") return { status: "completed" };
     const interview = await prisma.interview.findUniqueOrThrow({
       where: { id: interviewId },
-      include: { githubContext: true, interviewPlan: true, runtime: true },
+      include: {
+        knowledge: { select: { facts: true } },
+        interviewPlan: true,
+        runtime: true,
+      },
     });
     if (interview.status !== "completing")
       throw new Error("Interview is not ready for evaluation");
@@ -130,7 +134,7 @@ export class EvaluationService {
     const evidence = state.evidence
       .filter((e) => candidateIds.has(e.sourceTurnId))
       .slice(-80);
-    const context = interview.githubContext;
+    const context = readGithubContext(interview.knowledge?.facts);
     const result = turns.some((t) => t.role === "user" && t.text.trim())
       ? await withTrace(interviewId, "evaluation", () =>
           this.evaluator.evaluate({
@@ -139,7 +143,7 @@ export class EvaluationService {
               name: interview.name,
               projectSummary: context?.projectSummary.slice(0, 2500) ?? "",
               technologies: context?.technologies ?? [],
-              architecture: JSON.stringify(context?.architecture).slice(
+              architecture: JSON.stringify(context?.architecture ?? {}).slice(
                 0,
                 2500,
               ),

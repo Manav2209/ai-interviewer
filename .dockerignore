@@ -1,0 +1,17 @@
+**/node_modules
+**/.next
+**/.turbo
+**/dist
+**/build
+**/coverage
+**/*.tsbuildinfo
+**/*.log
+**/.env
+**/.env.*
+**/.git
+**/.vscode
+**/.idea
+**/playwright-report
+**/test-results
+.tmp
+packages/db/generated

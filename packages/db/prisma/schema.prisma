@@ -1,5 +1,6 @@
 generator client {
   provider = "prisma-client-js"
+  output   = "../generated/client"
 }
 
 datasource db {
@@ -36,13 +37,11 @@ model Interview {
   owner         String
   name          String
   status        InterviewStatus @default(created)
-  systemPrompt  String?
   error         String?
   createdAt     DateTime        @default(now())
   startedAt     DateTime?
   completedAt   DateTime?
   evaluationLeaseUntil DateTime?
-  githubContext GithubContext?
   interviewPlan InterviewPlan?
   sessions      InterviewSession[]
   turns         ConversationTurn[]
@@ -69,20 +68,6 @@ model InterviewRuntime {
   leaseUntil  DateTime?
 }
 
-model GithubContext {
-  id             String   @id @default(cuid())
-  interviewId    String   @unique
-  interview      Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
-  repository     Json
-  languages      String[]
-  technologies   String[]
-  dependencies   String[]
-  architecture   Json
-  importantFiles Json
-  projectSummary String
-  evidence       Json
-}
-
 model InterviewPlan {
   id          String   @id @default(cuid())
   interviewId String   @unique
@@ -90,7 +75,6 @@ model InterviewPlan {
   role        String
   difficulty  String
   topics      Json
-  questions   Json
   objectives  Json?
 }
 

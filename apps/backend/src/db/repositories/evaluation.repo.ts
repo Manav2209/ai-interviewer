@@ -1,5 +1,4 @@
-import type { Evaluation } from "@prisma/client";
-import { prisma } from "../client.js";
+import { type Evaluation, prisma } from "@repo/db";
 
 export type EvaluationDimensions =
   import("../../evaluation/evaluation.types.js").EvaluationDimensions;

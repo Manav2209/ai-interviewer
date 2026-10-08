@@ -1,4 +1,4 @@
-import { prisma } from "../client.js";
+import { prisma } from "@repo/db";
 
 export interface RealtimeEventInput {
   eventId: string;

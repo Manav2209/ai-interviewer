@@ -45,7 +45,7 @@ export function createInterviewsRouter(service: InterviewService): Hono {
       createdAt: interview.createdAt,
       preparationStage: interview.interviewPlan
         ? "ready"
-        : interview.githubContext
+        : interview.knowledge
           ? "planning"
           : "analyzing",
     });

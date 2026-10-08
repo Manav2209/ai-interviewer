@@ -14,7 +14,7 @@
       "name": "@repo/backend",
       "version": "0.0.0",
       "dependencies": {
-        "@prisma/client": "^6.5.0",
+        "@repo/db": "*",
         "@repo/voice-types": "*",
         "dotenv": "^16.4.5",
         "hono": "^4.6.0",
@@ -29,7 +29,6 @@
         "@types/bun": "^1.2.0",
         "@types/node": "^22.10.0",
         "eslint": "10.9.1",
-        "prisma": "^6.5.0",
         "typescript": "7.0.2",
       },
     },
@@ -76,6 +75,21 @@
         "@types/react": "19.2.18",
         "@types/react-dom": "19.2.5",
         "eslint": "10.9.1",
+        "typescript": "7.0.2",
+      },
+    },
+    "packages/db": {
+      "name": "@repo/db",
+      "version": "0.0.0",
+      "dependencies": {
+        "@prisma/client": "^6.5.0",
+      },
+      "devDependencies": {
+        "@repo/eslint-config": "*",
+        "@repo/typescript-config": "*",
+        "@types/node": "^22.10.0",
+        "eslint": "10.9.1",
+        "prisma": "^6.5.0",
         "typescript": "7.0.2",
       },
     },
@@ -448,6 +462,8 @@
     "@prisma/get-platform": ["@prisma/get-platform@6.19.3", "", { "dependencies": { "@prisma/debug": "6.19.3" } }, "sha512-xFj1VcJ1N3MKooOQAGO0W5tsd0W2QzIvW7DD7c/8H14Zmp4jseeWAITm+w2LLoLrlhoHdPPh0NMZ8mfL6puoHA=="],
 
     "@repo/backend": ["@repo/backend@workspace:apps/backend"],
+
+    "@repo/db": ["@repo/db@workspace:packages/db"],
 
     "@repo/eslint-config": ["@repo/eslint-config@workspace:packages/eslint-config"],
 

@@ -1,18 +1,15 @@
-import { prisma } from "../db/client.js";
-import { Prisma } from "@prisma/client";
+import { prisma, Prisma, type InterviewStatus } from "@repo/db";
 import { GithubScraper } from "../github/github.scraper.js";
 import { GithubAnalyzer } from "../github/github.analyzer.js";
 import { InterviewPlanner } from "./interview.planner.js";
 import type { LlmClient } from "../llm/llm.client.js";
 import { newId } from "../lib/ids.js";
-import { interviewRepo } from "../db/repositories/interview.repo.js";
-import type { InterviewStatus } from "@prisma/client";
+import {
+  interviewRepo,
+  type InterviewWithContext,
+} from "../db/repositories/interview.repo.js";
 import { storeKnowledge } from "../github/knowledge.js";
 import { withTrace } from "../observability/events.js";
-
-type InterviewWithContext = Prisma.InterviewGetPayload<{
-  include: { githubContext: true; interviewPlan: true };
-}>;
 
 export class InterviewService {
   private readonly scraper = new GithubScraper();
@@ -74,31 +71,6 @@ export class InterviewService {
       );
       await storeKnowledge(id, scraped, context);
 
-      await prisma.githubContext.upsert({
-        where: { interviewId: id },
-        create: {
-          interviewId: id,
-          repository: context.repository,
-          languages: context.languages,
-          technologies: context.technologies,
-          dependencies: context.dependencies,
-          architecture: context.architecture,
-          importantFiles: context.importantFiles,
-          projectSummary: context.projectSummary,
-          evidence: context.evidence,
-        },
-        update: {
-          repository: context.repository,
-          languages: context.languages,
-          technologies: context.technologies,
-          dependencies: context.dependencies,
-          architecture: context.architecture,
-          importantFiles: context.importantFiles,
-          projectSummary: context.projectSummary,
-          evidence: context.evidence,
-        },
-      });
-
       const plan = await withTrace(id, "interview_planning", () =>
         this.planner.plan(context),
       );
@@ -110,19 +82,17 @@ export class InterviewService {
           role: plan.role,
           difficulty: plan.difficulty,
           topics: plan.topics as unknown as Prisma.InputJsonValue,
-          questions: [],
           objectives: plan.objectives as unknown as Prisma.InputJsonValue,
         },
         update: {
           role: plan.role,
           difficulty: plan.difficulty,
           topics: plan.topics as unknown as Prisma.InputJsonValue,
-          questions: [],
           objectives: plan.objectives as unknown as Prisma.InputJsonValue,
         },
       });
 
-      await interviewRepo.markReady(id, "");
+      await interviewRepo.markReady(id);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error(`[interview:${id}] pipeline failed: ${message}`);

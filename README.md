@@ -8,6 +8,7 @@ A repository-aware technical interviewer with a cascaded voice pipeline and a du
 - `apps/voice-agent`: LiveKit voice worker, Silero VAD, Deepgram STT/TTS, playback interruptions, final answers, and spoken transcript events.
 - `apps/web`: Next.js candidate flow, live transcripts, reconnect, and interview results.
 - `packages/providers`: provider configuration and construction.
+- `packages/db`: Prisma schema, migration history, generated client, and shared database connection, exposed through `@repo/db`.
 
 The backend owns interview progression. Models extract information and generate questions; application code controls phases, objectives, difficulty, deadlines, and state changes. The voice worker speaks backend questions and cancels playback locally when candidate speech interrupts it.
 
@@ -48,6 +49,8 @@ Only HTTPS GitHub repository URLs are accepted. Fetches are pinned to a commit S
 
 Read tools expose project context, architecture, bounded file excerpts, lexical symbol lookup, code search, dependency lookup, candidate state, and the current objective. Code references include path, commit SHA, and line range. Symbol lookup uses lexical declarations rather than a language-specific AST. Dependency lookup currently supports `package.json`; other manifests contribute to repository analysis and can be inspected with file/search tools.
 
+Repository analysis and indexed source excerpts are stored together in `RepositoryKnowledge`. The consolidation migration copies legacy `GithubContext` analysis into that record before dropping the duplicate table. Existing source indexes and richer analysis are preserved. The unused `Interview.systemPrompt` and `InterviewPlan.questions` columns are removed; actual question history remains in interview runtime state.
+
 Repository text and candidate answers are untrusted data. All structured model outputs are validated with Zod. Model-proposed tools cannot directly mutate interview state. Limits include 40 questions, five tool calls per registry operation, 200 tool calls per interview, 60,000 input characters per model request, and bounded output tokens.
 
 ## Evaluation
@@ -66,20 +69,23 @@ The voice worker uses a separate internal bearer token and must supply a session
 
 ## Setup
 
-Requirements: Bun, Node.js 24+, PostgreSQL (or Docker), LiveKit, Deepgram, and an OpenAI-compatible model endpoint.
+Requirements: Bun 1.4.2, Node.js 24+, a PostgreSQL instance (local or managed), LiveKit, Deepgram, and an OpenAI-compatible model endpoint.
 
 ```bash
 bun install
 ```
 
-Copy each app's `.env.example` to `.env` and fill in credentials. The backend and voice worker must share `INTERNAL_API_TOKEN`. The web app uses `NEXT_PUBLIC_BACKEND_URL`.
+Copy each app's `.env.example` to `.env` and fill in credentials. Copy `packages/db/.env.example` to `packages/db/.env` and set its `DATABASE_URL` to your database's direct PostgreSQL connection URL. Set the backend's `DATABASE_URL` to the same database; the application may use a pooled connection URL. The backend and voice worker must share `INTERNAL_API_TOKEN`. The web app uses `NEXT_PUBLIC_BACKEND_URL`. From the repository root, generate the Prisma client and run migrations yourself against that database:
 
 ```bash
-cd apps/backend
-docker compose up -d
 bun run db:generate
 bun run db:migrate:deploy
+bun run db:migrate:status
 ```
+
+Database commands are root aliases for scripts in `packages/db`; Prisma dependencies and files live in that package. Prisma loads `packages/db/.env` for these commands. Alternatively, export `DATABASE_URL` in your shell. Development migrations use `db:migrate`; deployments use `db:migrate:deploy`.
+
+When applying the repository-context consolidation to an existing deployment, stop the backend and voice workers first, take a database backup, apply the migration manually, and start images built from the updated code. The previous backend requires the removed table and cannot run against the new schema.
 
 The backend defaults to a 30-minute interview and a 300-second reconnect window. Optional `GITHUB_TOKEN` authenticates public GitHub API requests. Silero controls answer boundaries with a 1-second silence window, while Deepgram final segments accumulate within an answer (500 ms provider endpointing). Silero also detects interruptions; its defaults require 400 ms of speech and two transcribed words for interruption, reducing accidental cancellation from brief noises.
 
@@ -97,6 +103,38 @@ bun run agent:start
 
 The worker dispatch name is `ai-interviewer`. Silero is preloaded once per worker process and reused for its session.
 
+## Docker
+
+Run Docker commands from the repository root (`my-turborepo`), since all three apps depend on workspace packages. Each app has its own multi-stage Dockerfile. Containers run as an unprivileged user, and `.dockerignore` excludes local dependencies, build outputs, and environment files.
+
+Fill in `apps/backend/.env` and `apps/voice-agent/.env` using their examples. Set `DATABASE_URL` in `apps/backend/.env` to your managed PostgreSQL connection URL, with the TLS settings required by your provider. Use the same LiveKit project, model endpoint, and `INTERNAL_API_TOKEN` in both. PostgreSQL, LiveKit, Deepgram, and the model endpoint remain external services.
+
+Run migrations yourself from a machine that can reach the managed database, before starting the application. After installing workspace dependencies, run this command from the repository root to apply migrations from `packages/db/prisma/migrations` using `packages/db/.env`:
+
+```bash
+bun run db:migrate:deploy
+```
+
+The backend image generates the Prisma client during its build. Client generation creates application code from the schema; it does not apply migrations or copy database data. Migration files remain in the repository for your manual migration workflow. The application containers do not run migrations on startup.
+
+`NEXT_PUBLIC_BACKEND_URL` must be reachable by the candidate's browser and is embedded during the web image build. Pass the public API URL with `--build-arg NEXT_PUBLIC_BACKEND_URL=...` when building the web image, and add the frontend origin to `CORS_ALLOWED_ORIGINS` in `apps/backend/.env`. Setting the URL only when running a built container does not change the browser bundle.
+
+If a provider runs on the Docker host, use `host.docker.internal` instead of `localhost` in its configured URL on Docker Desktop. A self-hosted LiveKit URL must also be reachable by the browser, since it is returned with the session token.
+
+Build individual images from the same root:
+
+```bash
+docker build -f apps/backend/Dockerfile -t ai-interview-backend:local .
+docker build -f apps/voice-agent/Dockerfile -t ai-interview-voice-agent:local .
+docker build -f apps/web/Dockerfile --build-arg NEXT_PUBLIC_BACKEND_URL=http://localhost:8080 -t ai-interview-web:local .
+```
+
+Run the images individually with Docker or your deployment platform. Supply the backend and voice worker environment variables at runtime. The voice worker's `BACKEND_BASE_URL` must resolve to the backend from inside its container. Publish port 8080 for the backend and port 3000 for the web app when running locally, and wait for the backend's `/health` endpoint before starting the voice worker.
+
+The voice image runs the worker in LiveKit's production `start` mode. Its health endpoint is on internal port 8081; it needs no published audio port because it connects to LiveKit. Mount persistent storage at `/app/data/voice-outbox` to preserve unacknowledged voice events across container replacement. Allow up to 65 minutes for active interviews to drain when stopping the voice container, for example with Docker's `--stop-timeout 3900` option when creating it.
+
+Your managed database has its own lifecycle and backups, independent of the application containers.
+
 ## Observability
 
 Interview events and timings are recorded in PostgreSQL, including retrieval, planning, candidate turns, analysis, action selection, tools, question generation, voice timings, interruptions, claim checks, and evaluation.
@@ -104,6 +142,8 @@ Interview events and timings are recorded in PostgreSQL, including retrieval, pl
 To export traces, configure `LANGFUSE_BASE_URL`, `LANGFUSE_PUBLIC_KEY`, and `LANGFUSE_SECRET_KEY` in the backend. The exporter uses [Langfuse's OTLP endpoint](https://langfuse.com/docs/observability/get-started) and retries unacknowledged events from the database. Candidate answers and source excerpts are omitted from exported trace metadata. Without credentials, events remain local.
 
 ## Checks
+
+GitHub Actions runs code checks and builds all three Docker images on pull requests, pushes to `main`, and manual runs. After code checks pass on a `main` push, it publishes images to Docker Hub under `manav2854` with `sha-<full commit SHA>` tags. Publishing requires the `DOCKERHUB_TOKEN` repository secret. Follow [docs/ci-practice.md](docs/ci-practice.md) to configure credentials, trigger runs, diagnose a deliberate failure, and require CI before merging. The workflow does not deploy or apply database migrations.
 
 ```bash
 bun run check-types

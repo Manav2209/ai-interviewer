@@ -1,10 +1,9 @@
-import { prisma } from "../db/client.js";
+import { prisma, Prisma } from "@repo/db";
 import { LiveKitService } from "./livekit.service.js";
 import { newId, newSessionId } from "../lib/ids.js";
 import type { BackendConfig } from "../config.js";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { initialState } from "../interview/schemas.js";
-import { Prisma } from "@prisma/client";
 
 export interface StartSessionResult {
   interviewId: string;

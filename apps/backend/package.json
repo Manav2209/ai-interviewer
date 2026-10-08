@@ -6,17 +6,13 @@
   "scripts": {
     "dev": "bun run src/server.ts",
     "start": "bun run src/server.ts",
-    "build": "prisma generate && tsc --noEmit",
+    "build": "tsc --noEmit",
     "check-types": "tsc --noEmit",
     "lint": "eslint src --max-warnings 0",
-    "test": "bun test src",
-    "db:generate": "prisma generate",
-    "db:migrate": "prisma migrate dev",
-    "db:migrate:deploy": "prisma migrate deploy",
-    "db:studio": "prisma studio"
+    "test": "bun test src"
   },
   "dependencies": {
-    "@prisma/client": "^6.5.0",
+    "@repo/db": "*",
     "@repo/voice-types": "*",
     "dotenv": "^16.4.5",
     "hono": "^4.6.0",
@@ -31,7 +27,6 @@
     "@types/bun": "^1.2.0",
     "@types/node": "^22.10.0",
     "eslint": "10.9.1",
-    "prisma": "^6.5.0",
     "typescript": "7.0.2"
   }
 }

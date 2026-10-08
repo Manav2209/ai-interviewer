@@ -114,7 +114,7 @@ export class ToolRegistry {
         const skill = z.object({ skill: z.string() }).parse(args).skill;
         if (
           !this.state.skills?.[skill] ||
-          this.state.skills[skill].needsMoreEvidence
+          this.state.skills[skill]?.needsMoreEvidence
         )
           throw new Error("Skill lacks evidence");
         this.state.exploredTopics = [

@@ -1,0 +1,149 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  # Finish main uploads; cancel superseded pull-request and practice runs.
+  cancel-in-progress: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' }}
+
+env:
+  NEXT_TELEMETRY_DISABLED: "1"
+  NEXT_PUBLIC_BACKEND_URL: ${{ vars.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8080' }}
+  DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME || 'manav2854' }}
+  # Manual runs validate builds. Only a main push publishes images.
+  PUBLISH_IMAGES: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+
+jobs:
+  checks:
+    name: Code checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      # Client generation does not connect to this database.
+      DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/ai_interviewer_ci?schema=public
+      ONNXRUNTIME_NODE_INSTALL: skip
+    steps:
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.4.2"
+
+      - name: Check Docker Hub token
+        if: env.PUBLISH_IMAGES == 'true'
+        env:
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [[ -z "$DOCKERHUB_TOKEN" ]]; then
+            echo "::error::Add the DOCKERHUB_TOKEN repository secret before publishing from main."
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile --network-concurrency=8
+
+      - name: Generate Prisma client
+        run: bun run db:generate
+
+      - name: Lint
+        run: bun run lint
+
+      - name: Check types
+        run: bun run check-types
+
+      - name: Test backend
+        run: bun run --cwd apps/backend test
+
+      - name: Build workspace
+        run: bun run build
+
+  docker:
+    name: Docker (${{ matrix.app }})
+    needs: checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [backend, web, voice-agent]
+    steps:
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to Docker Hub
+        if: env.PUBLISH_IMAGES == 'true'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: docker.io
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build image and publish on main
+        id: image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: apps/${{ matrix.app }}/Dockerfile
+          platforms: linux/amd64
+          push: ${{ env.PUBLISH_IMAGES == 'true' }}
+          tags: docker.io/${{ env.DOCKERHUB_USERNAME }}/ai-interview-${{ matrix.app }}:sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          build-args: |
+            NEXT_PUBLIC_BACKEND_URL=${{ env.NEXT_PUBLIC_BACKEND_URL }}
+          cache-from: type=gha,scope=${{ matrix.app }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.app }}
+
+      - name: Record published image
+        if: env.PUBLISH_IMAGES == 'true'
+        env:
+          IMAGE_REF: ${{ env.DOCKERHUB_USERNAME }}/ai-interview-${{ matrix.app }}:sha-${{ github.sha }}
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          {
+            echo "### Published image"
+            echo "Image: $IMAGE_REF"
+            echo "Digest: $IMAGE_DIGEST"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  ci:
+    # Require this single check in branch protection; it covers every image.
+    name: CI passed
+    needs: [checks, docker]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require all jobs to succeed
+        env:
+          CHECKS_RESULT: ${{ needs.checks.result }}
+          DOCKER_RESULT: ${{ needs.docker.result }}
+        run: |
+          if [[ "$CHECKS_RESULT" != "success" || "$DOCKER_RESULT" != "success" ]]; then
+            echo "CI failed: checks=$CHECKS_RESULT docker=$DOCKER_RESULT"
+            exit 1
+          fi

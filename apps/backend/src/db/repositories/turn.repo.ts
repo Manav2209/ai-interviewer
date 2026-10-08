@@ -1,5 +1,4 @@
-import type { ConversationTurn, TurnRole } from "@prisma/client";
-import { prisma } from "../client.js";
+import { type ConversationTurn, type TurnRole, prisma } from "@repo/db";
 
 export class TurnRepo {
   async create(input: {

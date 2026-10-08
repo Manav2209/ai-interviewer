@@ -11,7 +11,8 @@ import { interviewRepo } from "../db/repositories/interview.repo.js";
 import type { InterviewOrchestrator } from "../interview/orchestrator.js";
 import type { EvaluationService } from "../evaluation/evaluation.service.js";
 import { InterviewBusyError } from "../interview/runtime-lock.js";
-import { prisma } from "../db/client.js";
+import { prisma } from "@repo/db";
+import { readGithubContext } from "../github/context.js";
 
 const id = z.string().min(1).max(100);
 export function createInternalRouter(
@@ -40,13 +41,14 @@ export function createInternalRouter(
       c.req.param("interviewId"),
     );
     if (!interview) return c.json({ error: "Interview not found" }, 404);
+    const context = readGithubContext(interview.knowledge?.facts);
     return c.json({
       interviewId: interview.id,
       sessionId,
-      githubContext: interview.githubContext
+      githubContext: context
         ? {
-            repository: interview.githubContext.repository,
-            projectSummary: interview.githubContext.projectSummary,
+            repository: context.repository,
+            projectSummary: context.projectSummary,
           }
         : null,
       interview: { status: interview.status },

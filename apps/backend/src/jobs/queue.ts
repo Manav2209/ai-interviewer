@@ -1,5 +1,4 @@
-import { Prisma } from "@prisma/client";
-import { prisma } from "../db/client.js";
+import { Prisma, prisma } from "@repo/db";
 import { newId } from "../lib/ids.js";
 import { InterviewBusyError } from "../interview/runtime-lock.js";
 

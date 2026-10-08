@@ -1,6 +1,5 @@
-import { Prisma } from "@prisma/client";
+import { Prisma, prisma } from "@repo/db";
 import { z } from "zod";
-import { prisma } from "../db/client.js";
 import type { RealtimeEventInput } from "../db/repositories/realtime-event.repo.js";
 import { domainEvent } from "../observability/events.js";
 import { withInterviewLock } from "../interview/runtime-lock.js";

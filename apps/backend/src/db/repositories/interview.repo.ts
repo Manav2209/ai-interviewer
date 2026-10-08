@@ -1,5 +1,13 @@
-import type { Interview, InterviewStatus } from "@prisma/client";
-import { prisma } from "../client.js";
+import {
+  type Interview,
+  type InterviewStatus,
+  type Prisma,
+  prisma,
+} from "@repo/db";
+
+export type InterviewWithContext = Prisma.InterviewGetPayload<{
+  include: { knowledge: { select: { facts: true } }; interviewPlan: true };
+}>;
 
 export interface CreateInterviewInput {
   id: string;
@@ -22,10 +30,10 @@ export class InterviewRepo {
     return prisma.interview.findUnique({ where: { id } });
   }
 
-  async getWithContext(id: string) {
+  async getWithContext(id: string): Promise<InterviewWithContext | null> {
     return prisma.interview.findUnique({
       where: { id },
-      include: { githubContext: true, interviewPlan: true },
+      include: { knowledge: { select: { facts: true } }, interviewPlan: true },
     });
   }
 
@@ -47,12 +55,11 @@ export class InterviewRepo {
     });
   }
 
-  async markReady(id: string, systemPrompt: string): Promise<Interview> {
+  async markReady(id: string): Promise<Interview> {
     return prisma.interview.update({
       where: { id },
       data: {
         status: "ready",
-        systemPrompt,
         error: null,
         completedAt: null,
       },

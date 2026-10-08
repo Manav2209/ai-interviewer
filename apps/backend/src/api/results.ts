@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { evaluationRepo } from "../db/repositories/evaluation.repo.js";
 import { interviewRepo } from "../db/repositories/interview.repo.js";
-import { prisma } from "../db/client.js";
+import { prisma } from "@repo/db";
 
 export function createResultsRouter(): Hono {
   const app = new Hono();

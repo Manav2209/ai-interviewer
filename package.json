@@ -7,7 +7,13 @@
     "lint": "turbo run lint",
     "format": "prettier --write \"**/*.{ts,tsx,md}\"",
     "check-types": "turbo run check-types",
-    "agent:start": "turbo run agent:start"
+    "agent:start": "turbo run agent:start",
+    "db:generate": "bun run --cwd packages/db db:generate",
+    "db:validate": "bun run --cwd packages/db db:validate",
+    "db:migrate": "bun run --cwd packages/db db:migrate",
+    "db:migrate:deploy": "bun run --cwd packages/db db:migrate:deploy",
+    "db:migrate:status": "bun run --cwd packages/db db:migrate:status",
+    "db:studio": "bun run --cwd packages/db db:studio"
   },
   "devDependencies": {
     "prettier": "3.9.6",
@@ -20,7 +26,7 @@
   "devEngines": {
     "packageManager": {
       "name": "bun",
-      "version": "1.2.8"
+      "version": "1.4.2"
     }
   },
   "workspaces": [
