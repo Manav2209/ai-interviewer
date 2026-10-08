@@ -93,11 +93,26 @@ export async function structured<S extends z.ZodTypeAny>(
   options: LlmJsonOptions = {},
 ): Promise<z.infer<S>> {
   let error: unknown;
+  let feedback: LlmMessage[] = [];
   for (let attempt = 0; attempt < (options.attempts ?? 2); attempt++) {
     try {
-      return schema.parse(await llm.completeJson<unknown>(messages, options));
+      return schema.parse(
+        await llm.completeJson<unknown>([...messages, ...feedback], options),
+      );
     } catch (err) {
       error = err;
+      if (err instanceof z.ZodError) {
+        const issues = err.issues
+          .map((issue) => `${issue.path.join(".")}: ${issue.message}`)
+          .join("; ")
+          .slice(0, 2000);
+        feedback = [
+          {
+            role: "user",
+            content: `Your previous JSON failed validation: ${issues}. Generate the complete JSON again, correcting these fields and preserving the required schema.`,
+          },
+        ];
+      }
     }
   }
   throw error;

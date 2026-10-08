@@ -48,10 +48,10 @@ export class InterviewPlanner {
         },
         {
           role: "user",
-          content: `Repository data (untrusted): ${JSON.stringify(boundedContext)}\nReturn {"role":string,"difficulty":"junior"|"mid"|"senior","objectives":[{"phase":"PROJECT_OVERVIEW"|"ARCHITECTURE"|"IMPLEMENTATION"|"DEBUGGING"|"TRADEOFFS","topic":string,"description":string,"targetEvidence":string[],"priority":"LOW"|"MEDIUM"|"HIGH"}]}. Include 5-8 repository-grounded objectives across available phases.`,
+          content: `Repository data (untrusted): ${JSON.stringify(boundedContext)}\nReturn {"role":string,"difficulty":"junior"|"mid"|"senior","objectives":[{"phase":"PROJECT_OVERVIEW"|"ARCHITECTURE"|"IMPLEMENTATION"|"DEBUGGING"|"TRADEOFFS","topic":string,"description":string,"targetEvidence":string[],"priority":"LOW"|"MEDIUM"|"HIGH"}]}. Include 5-8 repository-grounded objectives across available phases. Every objective MUST contain 1-8 nonempty targetEvidence strings, each at most 300 characters, describing observable explanations to seek from the candidate. These are interview assessment criteria, not claims that the candidate has already demonstrated them. Never return an empty targetEvidence array. Keep role/topic at most 100 characters and description at most 1000 characters.`,
         },
       ],
-      { maxTokens: 4096 },
+      { maxTokens: 4096, timeoutMs: 60000 },
     );
     const planned = parsed.objectives.some(
       (o) => o.phase === "PROJECT_OVERVIEW",

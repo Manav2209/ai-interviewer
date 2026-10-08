@@ -1,6 +1,7 @@
 import { Prisma, prisma } from "@repo/db";
 import { newId } from "../lib/ids.js";
 import { InterviewBusyError } from "../interview/runtime-lock.js";
+import { withLeaseRenewal } from "./lease.js";
 
 export class JobDeferred extends Error {}
 
@@ -71,9 +72,17 @@ export class JobWorker {
           try {
             const handler = this.handlers[job.kind];
             if (!handler) throw new Error(`Unknown job kind ${job.kind}`);
-            await handler(
-              job.interviewId,
-              job.payload as Record<string, unknown>,
+            await withLeaseRenewal(
+              () =>
+                handler(
+                  job.interviewId,
+                  job.payload as Record<string, unknown>,
+                ),
+              () =>
+                prisma.interviewJob.updateMany({
+                  where: { id: job.id, leaseToken: token, status: "running" },
+                  data: { leaseUntil: new Date(Date.now() + 180_000) },
+                }),
             );
             await prisma.interviewJob.updateMany({
               where: { id: job.id, leaseToken: token },

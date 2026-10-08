@@ -98,6 +98,7 @@ export class GithubAnalyzer {
     ];
     const context = await structured(this.llm, contextSchema, messages, {
       maxTokens: 4096,
+      timeoutMs: 60000,
     });
     const paths = new Set((scraped.sources ?? []).map((f) => f.path));
 
