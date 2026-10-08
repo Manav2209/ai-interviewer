@@ -17,9 +17,9 @@ Use your managed PostgreSQL URL, including provider-required TLS settings. Apply
 
 ## Configure GitHub
 
-In repository Settings → Secrets and variables → Actions, add:
+In repository Settings → Environments → `production`, add the environment secret below. Add the variables in Settings → Secrets and variables → Actions:
 
-- Secret `EC2_SSH_PRIVATE_KEY`: the full SSH private key for this instance. Paste it directly into GitHub Secrets; do not commit it.
+- Environment secret `EC2_SSH_PRIVATE_KEY`: the full SSH private key for this instance. Paste it directly into GitHub Secrets; do not commit it. It is scoped to the workflow's `production` environment.
 - Variable `EC2_HOST`: `23.20.55.167` for the current practice instance.
 - Variable `EC2_USER`: `ubuntu`.
 - Variable `EC2_APP_DIR`: `/home/ubuntu/ai-interview`.
