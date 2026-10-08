@@ -14,7 +14,7 @@ Pull requests and manual runs only build images. A push to `main` also logs in t
 
 `CI passed` succeeds only when the checks and all three Docker jobs succeed, including uploads on `main`. It also fails if an upstream job was skipped or cancelled, so it can serve as the required check before merging. If one image fails, another image may already have been published; wait for the entire run to pass before deploying that commit's image set.
 
-CI uses a placeholder `DATABASE_URL` for client generation. This command does not connect to a database. No database or provider credentials are needed. Images are built for `linux/amd64`. Production migrations and deployment remain manual steps.
+CI uses a placeholder `DATABASE_URL` for client generation. This command does not connect to a database. No database or provider credentials are needed. Images are built for `linux/amd64`. Production migrations remain manual. The separate [Deploy EC2 workflow](ec2-deployment.md) automates deployment of successful published versions after its SSH setup is complete.
 
 Newer runs cancel older pull-request and manual runs for the same ref. Main pushes finish their uploads without that cancellation; always use a specific commit tag to choose the version you deploy.
 

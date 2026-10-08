@@ -1,0 +1,95 @@
+name: Deploy EC2
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: Full commit SHA from a successful main-push CI run
+        required: true
+        type: string
+  workflow_run:
+    workflows: [CI]
+    branches: [main]
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ec2-deployment
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # Auto deployment is opt-in. PR/manual CI builds do not publish images.
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository &&
+       vars.ENABLE_AUTO_DEPLOY == 'true')
+    runs-on: ${{ vars.DEPLOY_RUNNER || 'ubuntu-24.04' }}
+    timeout-minutes: 110
+    environment: production
+    env:
+      IMAGE_SHA: ${{ inputs.commit_sha || github.event.workflow_run.head_sha }}
+      PUBLIC_ORIGIN: ${{ vars.NEXT_PUBLIC_BACKEND_URL }}
+      EC2_HOST: ${{ vars.EC2_HOST }}
+      EC2_USER: ${{ vars.EC2_USER || 'ubuntu' }}
+      APP_DIR: ${{ vars.EC2_APP_DIR || '/home/ubuntu/ai-interview' }}
+      DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME || 'manav2854' }}
+    steps:
+      - name: Check out deployment scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validate configuration and published CI version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          [[ "$IMAGE_SHA" =~ ^[a-f0-9]{40}$ ]] || { echo "::error::Provide a full lowercase commit SHA."; exit 1; }
+          [[ "$PUBLIC_ORIGIN" =~ ^https://[a-zA-Z0-9.-]+$ ]] || { echo "::error::Set NEXT_PUBLIC_BACKEND_URL to your HTTPS origin."; exit 1; }
+          [[ "$EC2_HOST" =~ ^[a-zA-Z0-9.-]+$ && "$EC2_USER" =~ ^[a-z_][a-z0-9_-]*$ ]] || { echo "::error::Set valid EC2_HOST and EC2_USER variables."; exit 1; }
+          [[ "$APP_DIR" =~ ^/[a-zA-Z0-9_./-]+$ && "$APP_DIR" != *..* ]] || { echo "::error::Invalid EC2_APP_DIR."; exit 1; }
+          [[ "$DOCKERHUB_USERNAME" =~ ^[a-z0-9][a-z0-9_-]*$ ]] || { echo "::error::Invalid Docker Hub namespace."; exit 1; }
+          result=$(gh api "repos/$REPOSITORY/actions/workflows/ci.yml/runs?event=push&branch=main&head_sha=$IMAGE_SHA&per_page=1" \
+            --jq '.workflow_runs[0] | [.status, .conclusion, .event, .head_branch] | @tsv')
+          [[ "$result" == $'completed\tsuccess\tpush\tmain' ]] || { echo "::error::This SHA has no currently successful main-push CI run."; exit 1; }
+
+      - name: Connect over SSH and deploy
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+          KNOWN_HOSTS: ${{ vars.EC2_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          [[ -n "$SSH_PRIVATE_KEY" && -n "$KNOWN_HOSTS" ]] || { echo "::error::Configure EC2_SSH_PRIVATE_KEY and EC2_KNOWN_HOSTS."; exit 1; }
+          key_dir=$(mktemp -d)
+          trap 'rm -rf -- "$key_dir"' EXIT
+          umask 077
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$key_dir/key"
+          printf '%s\n' "$KNOWN_HOSTS" > "$key_dir/known_hosts"
+          ssh-keygen -F "$EC2_HOST" -f "$key_dir/known_hosts" >/dev/null || { echo "::error::Known hosts does not contain EC2_HOST."; exit 1; }
+          ssh_options=(-i "$key_dir/key" -o BatchMode=yes -o IdentitiesOnly=yes
+            -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$key_dir/known_hosts"
+            -o ConnectTimeout=20 -o ServerAliveInterval=30 -o ServerAliveCountMax=10)
+          target="$EC2_USER@$EC2_HOST"
+          # Only scripts are transferred; application credentials stay on EC2.
+          remote_stage=$(ssh "${ssh_options[@]}" "$target" 'umask 077; mktemp -d "$HOME/.ai-interview-deploy.XXXXXXXX"')
+          [[ "$remote_stage" =~ ^/home/[a-zA-Z0-9_-]+/\.ai-interview-deploy\.[a-zA-Z0-9]+$ ]] || { echo "::error::Unexpected remote staging path."; exit 1; }
+          trap 'ssh "${ssh_options[@]}" "$target" "rm -rf -- $remote_stage" || true; rm -rf -- "$key_dir"' EXIT
+          tar -C scripts/deploy -cf - bootstrap.sh deploy.sh prepare-env.mjs |
+            ssh "${ssh_options[@]}" "$target" "tar -xf - -C $remote_stage"
+          ssh "${ssh_options[@]}" "$target" \
+            "sudo -n bash $remote_stage/bootstrap.sh && sudo -n bash $remote_stage/deploy.sh $IMAGE_SHA $PUBLIC_ORIGIN $DOCKERHUB_USERNAME $APP_DIR"
+
+      - name: Record deployed version
+        run: |
+          {
+            echo "Deployed commit: $IMAGE_SHA"
+            echo "Application: $PUBLIC_ORIGIN"
+          } >> "$GITHUB_STEP_SUMMARY"

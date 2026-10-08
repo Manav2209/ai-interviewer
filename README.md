@@ -143,7 +143,9 @@ To export traces, configure `LANGFUSE_BASE_URL`, `LANGFUSE_PUBLIC_KEY`, and `LAN
 
 ## Checks
 
-GitHub Actions runs code checks and builds all three Docker images on pull requests, pushes to `main`, and manual runs. After code checks pass on a `main` push, it publishes images to Docker Hub under `manav2854` with `sha-<full commit SHA>` tags. Publishing requires the `DOCKERHUB_TOKEN` repository secret. Follow [docs/ci-practice.md](docs/ci-practice.md) to configure credentials, trigger runs, diagnose a deliberate failure, and require CI before merging. The workflow does not deploy or apply database migrations.
+GitHub Actions runs code checks and builds all three Docker images on pull requests, pushes to `main`, and manual runs. After code checks pass on a `main` push, it publishes images to Docker Hub under `manav2854` with `sha-<full commit SHA>` tags. Publishing requires the `DOCKERHUB_TOKEN` repository secret. Follow [docs/ci-practice.md](docs/ci-practice.md) to configure credentials, trigger runs, diagnose a deliberate failure, and require CI before merging. CI does not apply database migrations.
+
+The separate **Deploy EC2** workflow deploys a successful CI image set over SSH. It defaults to a manual release button; automatic deployment after successful main CI is opt-in. It validates runtime env files and database access, recreates containers behind Caddy HTTPS, and checks the browser-session endpoint. Follow [docs/ec2-deployment.md](docs/ec2-deployment.md) for the required SSH secret, verified host keys, server env files, and runner network access. Database migrations remain manual.
 
 ```bash
 bun run check-types

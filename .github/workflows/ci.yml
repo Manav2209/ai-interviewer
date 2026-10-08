@@ -72,6 +72,14 @@ jobs:
       - name: Test backend
         run: bun run --cwd apps/backend test
 
+      - name: Test deployment env handling
+        run: bun test scripts/deploy/prepare-env.test.ts
+
+      - name: Check deployment shell syntax
+        run: |
+          bash -n scripts/deploy/bootstrap.sh
+          bash -n scripts/deploy/deploy.sh
+
       - name: Build workspace
         run: bun run build
 
